@@ -1,4 +1,4 @@
-import { env } from "@/lib/runtime-env";
+import { env } from "kodo-runtime-env";
 
 type D1Result<T = Record<string, unknown>> = { results?: T[] };
 

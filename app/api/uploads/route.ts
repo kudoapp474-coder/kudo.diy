@@ -1,4 +1,4 @@
-import { env } from "@/lib/runtime-env";
+import { env } from "kodo-runtime-env";
 import { id, now } from "../../../lib/db";
 import { requireApiUser, unauthorized } from "../../../lib/server-auth";
 
