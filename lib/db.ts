@@ -1,9 +1,67 @@
+import { neon, type NeonQueryFunction } from "@neondatabase/serverless";
 import { env } from "kodo-runtime-env";
 
-type D1Result<T = Record<string, unknown>> = { results?: T[] };
+type QueryResult<T = Record<string, unknown>> = { results?: T[] };
+type RunResult = { meta?: { changes?: number } };
 
-export function database() {
-  return env.DB as D1Database;
+export interface PreparedStatement {
+  bind(...values: unknown[]): PreparedStatement;
+  first<T = Record<string, unknown>>(): Promise<T | null>;
+  all<T = Record<string, unknown>>(): Promise<QueryResult<T>>;
+  run(): Promise<RunResult>;
+}
+
+export interface KodoDatabase {
+  prepare(query: string): PreparedStatement;
+  batch(statements: PreparedStatement[]): Promise<unknown[]>;
+}
+
+type FullNeon = NeonQueryFunction<false, true>;
+
+class NeonStatement implements PreparedStatement {
+  private values: unknown[] = [];
+  constructor(private readonly sql: FullNeon, private readonly query: string) {}
+  bind(...values: unknown[]) { this.values = values; return this; }
+  private async execute<T>() {
+    const result = await this.sql.query(normalizeSql(this.query), this.values);
+    return { rows: result.rows as T[], changes: result.rowCount ?? 0 };
+  }
+  async first<T>() { const result = await this.execute<T>(); return result.rows[0] ?? null; }
+  async all<T>() { const result = await this.execute<T>(); return { results: result.rows }; }
+  async run() { const result = await this.execute(); return { meta: { changes: result.changes } }; }
+}
+
+class NeonDatabase implements KodoDatabase {
+  constructor(private readonly sql: FullNeon) {}
+  prepare(query: string) { return new NeonStatement(this.sql, query); }
+  async batch(statements: PreparedStatement[]) {
+    const results: unknown[] = [];
+    for (const statement of statements) results.push(await statement.run());
+    return results;
+  }
+}
+
+let neonDatabase: KodoDatabase | null = null;
+
+export function database(): KodoDatabase {
+  const connectionString = process.env.DATABASE_URL;
+  if (connectionString) {
+    if (!neonDatabase) neonDatabase = new NeonDatabase(neon(connectionString, { fullResults: true }));
+    return neonDatabase;
+  }
+  if (env.DB) return env.DB as unknown as KodoDatabase;
+  throw new Error("Database is not configured. Connect Neon or provide the Cloudflare D1 binding.");
+}
+
+function normalizeSql(query: string) {
+  const ignoredInsert = /INSERT\s+OR\s+IGNORE\s+INTO/i.test(query);
+  let normalized = query
+    .replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, "INSERT INTO")
+    .replace(/\bMAX\s*\(/gi, "GREATEST(");
+  let parameter = 0;
+  normalized = normalized.replace(/\?/g, () => `$${++parameter}`);
+  if (ignoredInsert && !/ON\s+CONFLICT/i.test(normalized)) normalized = `${normalized.replace(/;\s*$/, "")} ON CONFLICT DO NOTHING`;
+  return normalized;
 }
 
 export async function ensureDatabase() {
@@ -27,15 +85,10 @@ export async function ensureDatabase() {
   return db;
 }
 
-export async function all<T>(statement: D1PreparedStatement): Promise<T[]> {
-  const result = await statement.all<T>() as D1Result<T>;
+export async function all<T>(statement: PreparedStatement): Promise<T[]> {
+  const result = await statement.all<T>();
   return result.results ?? [];
 }
 
-export function id(prefix: string) {
-  return `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`;
-}
-
-export function now() {
-  return new Date().toISOString();
-}
+export function id(prefix: string) { return `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 20)}`; }
+export function now() { return new Date().toISOString(); }
