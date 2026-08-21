@@ -15,6 +15,7 @@ export async function GET() {
     checks: {
       database,
       objectStorage: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
+      authentication: Boolean(process.env.CLERK_SECRET_KEY && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY),
       aiGateway: Boolean(process.env.AI_GATEWAY_API_KEY),
       githubApp: Boolean(process.env.GITHUB_APP_ID && process.env.GITHUB_APP_PRIVATE_KEY && process.env.GITHUB_APP_SLUG),
       sandbox: Boolean(process.env.SANDBOX_API_URL && process.env.SANDBOX_API_TOKEN),
