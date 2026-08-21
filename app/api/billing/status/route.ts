@@ -1,4 +1,5 @@
 import { requireApiUser, unauthorized } from "../../../../lib/server-auth";
+import { hasProAccess } from "../../../../lib/billing-lifecycle";
 
 type BillingStatusRow = {
   plan: string | null;
@@ -7,8 +8,6 @@ type BillingStatusRow = {
   next_billing_date: string | null;
   cancel_at_next_billing_date: number | null;
 };
-
-const ACTIVE_SUBSCRIPTION_STATUSES = new Set(["active", "unpaused"]);
 
 export async function GET() {
   const auth = await requireApiUser();
@@ -25,9 +24,7 @@ export async function GET() {
     .first<BillingStatusRow>();
 
   const subscriptionStatus = billing?.status?.toLowerCase() ?? null;
-  const active =
-    billing?.plan === "pro" ||
-    (subscriptionStatus !== null && ACTIVE_SUBSCRIPTION_STATUSES.has(subscriptionStatus));
+  const active = hasProAccess(billing?.plan, subscriptionStatus);
 
   return Response.json(
     {
