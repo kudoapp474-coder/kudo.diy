@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { ProductShell } from "./product-shell";
 import { BillingPlanCard } from "./billing-plan-card";
+import { BillingUsage } from "./billing-usage";
 
 const agents = [
   { name: "Build onboarding flow", repo: "kodo/web", branch: "feat/onboarding", status: "Working", time: "6m", icon: Sparkles },
@@ -65,5 +66,5 @@ export function SettingsView() {
 }
 
 export function BillingView() {
-  return <ProductShell active="billing" title="Plans & billing" context="KODO CREDITS"><div className="billing-grid"><BillingPlanCard/><section className="billing-details"><h2>Billing system</h2><div><span>Checkout</span><b>Dodo Payments hosted checkout</b><button>Secure</button></div><div><span>Credits</span><b>Refilled by signed Dodo webhook</b><button>Verified</button></div><div><span>Invoices</span><b>Managed by Dodo Payments</b><button>External</button></div></section></div><section className="usage-breakdown"><header><div><h2>Usage this month</h2><p>Credits are used when KODO plans, edits, and verifies code.</p></div><select><option>August 2026</option></select></header><div className="usage-chart"><div className="chart-y"><span>200</span><span>150</span><span>100</span><span>50</span><span>0</span></div><div className="bars">{[34,52,45,77,61,84,56,91,68,73,88,48,65,82,94,71].map((height,index) => <i key={index} style={{height:`${height}%`}} />)}</div></div></section></ProductShell>;
+  return <ProductShell active="billing" title="Plans & billing" context="KODO CREDITS"><div className="billing-grid"><BillingPlanCard/><section className="billing-details"><h2>Billing system</h2><div><span>Checkout</span><b>Dodo Payments hosted checkout</b><button>Secure</button></div><div><span>Credits</span><b>Refilled by signed Dodo webhook</b><button>Verified</button></div><div><span>Invoices</span><b>Managed by Dodo Payments</b><button>External</button></div></section></div><BillingUsage /></ProductShell>;
 }
