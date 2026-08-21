@@ -7,6 +7,10 @@ type DodoEvent = {
   data?: {
     metadata?: Record<string, string>;
     subscription_id?: string;
+    customer?: { customer_id?: string };
+    product_id?: string;
+    next_billing_date?: string;
+    cancel_at_next_billing_date?: boolean;
     payment_id?: string;
     payload_type?: string;
     status?: string;
@@ -34,6 +38,12 @@ function lifecycleMetadata(event: DodoEvent, webhookId: string) {
     eventType: event.type,
     status: event.data?.status,
   });
+}
+
+function subscriptionStatus(event: DodoEvent) {
+  if (event.data?.status) return event.data.status.toLowerCase();
+  if (["subscription.active", "subscription.renewed", "subscription.unpaused", "subscription.plan_changed"].includes(event.type)) return "active";
+  return event.type.replace("subscription.", "");
 }
 
 function decodeSecret(secret: string) {
@@ -88,9 +98,16 @@ export async function POST(request: Request) {
   const db = await ensureDatabase();
   const claimed = await db.prepare("INSERT OR IGNORE INTO billing_events (event_id, provider, event_type, workspace_id, payload_json, processed_at) VALUES (?, 'dodo', ?, ?, ?, ?)")
     .bind(webhookId, event.type, workspaceId ?? null, body, now()).run();
-  if ((claimed.meta?.changes ?? 0) === 0) return Response.json({ received: true, duplicate: true });
+  const duplicate = (claimed.meta?.changes ?? 0) === 0;
 
-  if (!workspaceId) return Response.json({ received: true });
+  if (!workspaceId) return Response.json({ received: true, ...(duplicate ? { duplicate: true } : {}) });
+
+  if (event.type.startsWith("subscription.") && event.data?.subscription_id) {
+    await db.prepare("INSERT INTO billing_subscriptions (workspace_id, provider, subscription_id, customer_id, product_id, status, next_billing_date, cancel_at_next_billing_date, updated_at) VALUES (?, 'dodo', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET subscription_id = excluded.subscription_id, customer_id = excluded.customer_id, product_id = excluded.product_id, status = excluded.status, next_billing_date = excluded.next_billing_date, cancel_at_next_billing_date = excluded.cancel_at_next_billing_date, updated_at = excluded.updated_at")
+      .bind(workspaceId, event.data.subscription_id, event.data.customer?.customer_id ?? null, event.data.product_id ?? null, subscriptionStatus(event), event.data.next_billing_date ?? null, event.data.cancel_at_next_billing_date ? 1 : 0, now()).run();
+  }
+
+  if (duplicate) return Response.json({ received: true, duplicate: true });
 
   if (event.type === "subscription.active") {
     await db.batch([
