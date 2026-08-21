@@ -1,4 +1,5 @@
 import { ensureDatabase, id, now } from "../../../../lib/db";
+import { planForSubscriptionEvent } from "../../../../lib/billing-lifecycle";
 
 type DodoEvent = {
   business_id?: string;
@@ -16,19 +17,6 @@ type DodoEvent = {
     status?: string;
   };
 };
-
-const proStatuses = new Set(["active", "unpaused"]);
-const restrictedStatuses = new Set(["cancelled", "expired", "failed", "on_hold", "paused"]);
-
-function lifecyclePlan(event: DodoEvent) {
-  if (["subscription.active", "subscription.unpaused", "subscription.plan_changed"].includes(event.type)) return "pro";
-  if (["subscription.cancelled", "subscription.expired", "subscription.failed", "subscription.on_hold", "subscription.paused"].includes(event.type)) return "free";
-  if (event.type !== "subscription.updated") return null;
-  const status = event.data?.status?.toLowerCase();
-  if (status && proStatuses.has(status)) return "pro";
-  if (status && restrictedStatuses.has(status)) return "free";
-  return null;
-}
 
 function lifecycleMetadata(event: DodoEvent, webhookId: string) {
   return JSON.stringify({
@@ -102,6 +90,11 @@ export async function POST(request: Request) {
 
   if (!workspaceId) return Response.json({ received: true, ...(duplicate ? { duplicate: true } : {}) });
 
+  const expectedProductId = process.env.DODO_PAYMENTS_PRODUCT_ID;
+  if (event.type.startsWith("subscription.") && (!expectedProductId || event.data?.product_id !== expectedProductId)) {
+    return Response.json({ received: true, ignored: true, ...(duplicate ? { duplicate: true } : {}) });
+  }
+
   if (event.type.startsWith("subscription.") && event.data?.subscription_id) {
     await db.prepare("INSERT INTO billing_subscriptions (workspace_id, provider, subscription_id, customer_id, product_id, status, next_billing_date, cancel_at_next_billing_date, updated_at) VALUES (?, 'dodo', ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(workspace_id) DO UPDATE SET subscription_id = excluded.subscription_id, customer_id = excluded.customer_id, product_id = excluded.product_id, status = excluded.status, next_billing_date = excluded.next_billing_date, cancel_at_next_billing_date = excluded.cancel_at_next_billing_date, updated_at = excluded.updated_at")
       .bind(workspaceId, event.data.subscription_id, event.data.customer?.customer_id ?? null, event.data.product_id ?? null, subscriptionStatus(event), event.data.next_billing_date ?? null, event.data.cancel_at_next_billing_date ? 1 : 0, now()).run();
@@ -122,7 +115,7 @@ export async function POST(request: Request) {
         .bind(id("use"), workspaceId, lifecycleMetadata(event, webhookId), now()),
     ]);
   } else if (event.type.startsWith("subscription.")) {
-    const plan = lifecyclePlan(event);
+    const plan = planForSubscriptionEvent(event.type, event.data?.status);
     const statements = [
       db.prepare("INSERT INTO usage_events (id, workspace_id, kind, units, metadata_json, created_at) VALUES (?, ?, 'subscription_status', 0, ?, ?)")
         .bind(id("use"), workspaceId, lifecycleMetadata(event, webhookId), now()),
