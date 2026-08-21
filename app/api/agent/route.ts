@@ -2,8 +2,10 @@ import { ToolLoopAgent, isStepCount, tool } from "ai";
 import { z } from "zod";
 import { all, id, now } from "../../../lib/db";
 import { requireApiUser, unauthorized } from "../../../lib/server-auth";
+import { nativeSandboxConfigured, runProjectChecks } from "../../../lib/vercel-sandbox";
 
 const MODEL = "openai/gpt-5.6-sol";
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   const auth = await requireApiUser();
@@ -72,15 +74,14 @@ export async function POST(request: Request) {
         description: "Run project build and tests in the connected secure sandbox.",
         inputSchema: z.object({ command: z.string().max(300).default("npm run build") }),
         execute: async ({ command }) => {
-          if (!process.env.SANDBOX_API_URL || !process.env.SANDBOX_API_TOKEN) {
+          if (!nativeSandboxConfigured()) {
             steps.push({ type: "test", label: "Checks need sandbox connection", status: "skipped" });
-            return { status: "skipped", reason: "Secure sandbox is not connected. Do not claim tests passed." };
+            return { status: "skipped", reason: "Vercel OIDC is unavailable. Do not claim tests passed." };
           }
           const files = await all<{ path: string; content: string }>(auth.db.prepare("SELECT path, content FROM project_files WHERE project_id = ?").bind(projectId));
-          const response = await fetch(`${process.env.SANDBOX_API_URL.replace(/\/$/, "")}/run`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${process.env.SANDBOX_API_TOKEN}` }, body: JSON.stringify({ command, files }) });
-          const result = await response.json();
-          steps.push({ type: "test", label: response.ok ? "Build and tests passed" : "Checks failed", status: response.ok ? "complete" : "failed" });
-          return { status: response.ok ? "passed" : "failed", result };
+          const result = await runProjectChecks(files, command);
+          steps.push({ type: "test", label: result.status === "passed" ? "Build and tests passed" : "Checks failed", status: result.status === "passed" ? "complete" : "failed" });
+          return result;
         },
       }),
       createVersion: tool({
