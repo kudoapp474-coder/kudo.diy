@@ -13,6 +13,29 @@ type DodoEvent = {
   };
 };
 
+const proStatuses = new Set(["active", "unpaused"]);
+const restrictedStatuses = new Set(["cancelled", "expired", "failed", "on_hold", "paused"]);
+
+function lifecyclePlan(event: DodoEvent) {
+  if (["subscription.active", "subscription.unpaused", "subscription.plan_changed"].includes(event.type)) return "pro";
+  if (["subscription.cancelled", "subscription.expired", "subscription.failed", "subscription.on_hold", "subscription.paused"].includes(event.type)) return "free";
+  if (event.type !== "subscription.updated") return null;
+  const status = event.data?.status?.toLowerCase();
+  if (status && proStatuses.has(status)) return "pro";
+  if (status && restrictedStatuses.has(status)) return "free";
+  return null;
+}
+
+function lifecycleMetadata(event: DodoEvent, webhookId: string) {
+  return JSON.stringify({
+    provider: "dodo",
+    webhookId,
+    subscriptionId: event.data?.subscription_id,
+    eventType: event.type,
+    status: event.data?.status,
+  });
+}
+
 function decodeSecret(secret: string) {
   const encoded = secret.startsWith("whsec_") ? secret.slice(6) : secret;
   const binary = atob(encoded);
@@ -73,16 +96,22 @@ export async function POST(request: Request) {
     await db.batch([
       db.prepare("UPDATE workspaces SET plan = 'pro', credits = MAX(credits, 5000) WHERE id = ?").bind(workspaceId),
       db.prepare("INSERT INTO usage_events (id, workspace_id, kind, units, metadata_json, created_at) VALUES (?, ?, 'subscription_credit', 5000, ?, ?)")
-        .bind(id("use"), workspaceId, JSON.stringify({ provider: "dodo", webhookId, subscriptionId: event.data?.subscription_id }), now()),
+        .bind(id("use"), workspaceId, lifecycleMetadata(event, webhookId), now()),
     ]);
   } else if (event.type === "subscription.renewed") {
     await db.batch([
       db.prepare("UPDATE workspaces SET plan = 'pro', credits = credits + 5000 WHERE id = ?").bind(workspaceId),
       db.prepare("INSERT INTO usage_events (id, workspace_id, kind, units, metadata_json, created_at) VALUES (?, ?, 'subscription_renewal', 5000, ?, ?)")
-        .bind(id("use"), workspaceId, JSON.stringify({ provider: "dodo", webhookId, subscriptionId: event.data?.subscription_id }), now()),
+        .bind(id("use"), workspaceId, lifecycleMetadata(event, webhookId), now()),
     ]);
-  } else if (["subscription.cancelled", "subscription.expired", "subscription.failed"].includes(event.type)) {
-    await db.prepare("UPDATE workspaces SET plan = 'free' WHERE id = ?").bind(workspaceId).run();
+  } else if (event.type.startsWith("subscription.")) {
+    const plan = lifecyclePlan(event);
+    const statements = [
+      db.prepare("INSERT INTO usage_events (id, workspace_id, kind, units, metadata_json, created_at) VALUES (?, ?, 'subscription_status', 0, ?, ?)")
+        .bind(id("use"), workspaceId, lifecycleMetadata(event, webhookId), now()),
+    ];
+    if (plan) statements.unshift(db.prepare("UPDATE workspaces SET plan = ? WHERE id = ?").bind(plan, workspaceId));
+    await db.batch(statements);
   }
 
   return Response.json({ received: true });
