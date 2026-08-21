@@ -42,6 +42,7 @@ export async function ProductShell({ active, title, context, children, actions }
   const credits = Number(billing?.credits ?? 500);
   const includedCredits = plan === "Pro" ? 5000 : 500;
   const creditPercent = Math.min(100, Math.max(0, (credits / includedCredits) * 100));
+  const lowCredits = credits <= 100;
   const initial = (auth?.user.displayName?.trim().charAt(0) || "U").toUpperCase();
 
   return (
@@ -59,7 +60,7 @@ export async function ProductShell({ active, title, context, children, actions }
         <nav>{navigation.map((item) => <a className={active === item.label.toLowerCase() ? "active" : ""} href={item.href} key={item.href}><item.icon size={16} /><span>{item.label}</span>{item.badge && <em>{item.badge}</em>}</a>)}</nav>
         <p className="sidebar-caption">RECENT PROJECTS</p>
         <div className="recent-project-links"><a href="/project/kodo-web"><span className="project-glyph violet"><Sparkles size={12} /></span><span><b>KODO Web</b><small>Updated now</small></span></a><a href="/project/checkout-flow"><span className="project-glyph green">C</span><span><b>Checkout Flow</b><small>8 minutes ago</small></span></a><a href="/project/api-docs"><span className="project-glyph amber">A</span><span><b>API Docs</b><small>Yesterday</small></span></a></div>
-        <div className="sidebar-account"><div className={`credit-card ${active === "billing" ? "active" : ""}`}><span><Zap size={13} /> KODO {plan}</span><small>{credits.toLocaleString("en-IN")} credits remaining</small><i><b style={{ width: `${creditPercent}%` }} /></i><a href="/billing">Manage plan</a></div><a className={active === "settings" ? "active" : ""} href="/settings"><Settings size={15} /> Settings</a></div>
+        <div className="sidebar-account"><div className={`credit-card ${active === "billing" ? "active" : ""} ${lowCredits ? "low" : ""}`}><span><Zap size={13} /> KODO {plan}</span><small>{credits.toLocaleString("en-IN")} credits remaining{lowCredits ? " · Low balance" : ""}</small><i><b style={{ width: `${creditPercent}%` }} /></i><a href="/billing">Manage plan</a></div><a className={active === "settings" ? "active" : ""} href="/settings"><Settings size={15} /> Settings</a></div>
       </aside>
 
       <section className="product-content">
