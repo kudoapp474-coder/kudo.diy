@@ -9,7 +9,21 @@ type UsageRow = {
   created_at: string;
 };
 
-function usageLabel(kind: string) {
+function eventMetadata(row: UsageRow) {
+  try {
+    return JSON.parse(row.metadata_json) as { eventType?: string; status?: string; creditsUsed?: number };
+  } catch {
+    return {};
+  }
+}
+
+function usageLabel(row: UsageRow) {
+  const { eventType, status } = eventMetadata(row);
+  if (row.kind === "subscription_status") {
+    const lifecycle = (eventType?.replace("subscription.", "") || status || "updated").replaceAll("_", " ");
+    return `Subscription ${lifecycle}`;
+  }
+  const kind = row.kind;
   if (kind === "subscription_credit") return "Pro activation credits";
   if (kind === "subscription_renewal") return "Pro renewal credits";
   return "KODO agent run";
@@ -17,11 +31,7 @@ function usageLabel(kind: string) {
 
 function eventCredits(row: UsageRow) {
   if (row.kind !== "agent_tokens") return Number(row.units || 0);
-  try {
-    return Number((JSON.parse(row.metadata_json) as { creditsUsed?: number }).creditsUsed ?? 0);
-  } catch {
-    return 0;
-  }
+  return Number(eventMetadata(row).creditsUsed ?? 0);
 }
 
 export async function BillingUsage() {
@@ -41,8 +51,9 @@ export async function BillingUsage() {
         <div className="usage-history-head"><span>Activity</span><span>Date</span><span>Credits</span></div>
         {recent.map((row, index) => {
           const credits = eventCredits(row);
-          const isCredit = row.kind.startsWith("subscription_");
-          return <div className="usage-history-row" key={`${row.generation_id ?? row.kind}-${row.created_at}-${index}`}><span><b>{usageLabel(row.kind)}</b><small>{row.generation_id ?? "Dodo Payments"}</small></span><time>{new Date(row.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</time><em className={isCredit ? "credit" : "debit"}>{isCredit ? "+" : "−"}{credits.toLocaleString("en-IN")}</em></div>;
+          const isCredit = row.kind === "subscription_credit" || row.kind === "subscription_renewal";
+          const isNeutral = row.kind === "subscription_status";
+          return <div className="usage-history-row" key={`${row.generation_id ?? row.kind}-${row.created_at}-${index}`}><span><b>{usageLabel(row)}</b><small>{row.generation_id ?? "Dodo Payments"}</small></span><time>{new Date(row.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</time><em className={isNeutral ? "neutral" : isCredit ? "credit" : "debit"}>{isNeutral ? "—" : `${isCredit ? "+" : "−"}${credits.toLocaleString("en-IN")}`}</em></div>;
         })}
       </div> : <div className="usage-empty"><b>No credit activity yet</b><span>Your completed agent runs and subscription refills will appear here.</span></div>}
     </section>
