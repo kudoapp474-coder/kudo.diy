@@ -26,6 +26,7 @@ function tail(value: string) {
 
 export function nativeSandboxConfigured() {
   return Boolean(
+    process.env.VERCEL ||
     process.env.VERCEL_OIDC_TOKEN ||
     (process.env.VERCEL_TOKEN && process.env.VERCEL_TEAM_ID && process.env.VERCEL_PROJECT_ID),
   );
