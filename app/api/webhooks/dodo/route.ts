@@ -110,7 +110,9 @@ export async function POST(request: Request) {
     ]);
   } else if (event.type === "subscription.renewed") {
     await db.batch([
-      db.prepare("UPDATE workspaces SET plan = 'pro', credits = credits + 5000 WHERE id = ?").bind(workspaceId),
+      // Guarantee the monthly allowance without stacking repeated renewal
+      // events or reducing a legitimate rollover/top-up balance.
+      db.prepare("UPDATE workspaces SET plan = 'pro', credits = MAX(credits, 5000) WHERE id = ?").bind(workspaceId),
       db.prepare("INSERT INTO usage_events (id, workspace_id, kind, units, metadata_json, created_at) VALUES (?, ?, 'subscription_renewal', 5000, ?, ?)")
         .bind(id("use"), workspaceId, lifecycleMetadata(event, webhookId), now()),
     ]);
