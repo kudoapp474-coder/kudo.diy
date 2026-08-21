@@ -3,7 +3,7 @@ import path from "node:path";
 
 const nextConfig: NextConfig = {
   webpack(config) {
-    config.resolve.alias["cloudflare:workers"] = path.resolve(
+    config.resolve.alias["@/lib/runtime-env"] = path.resolve(
       process.cwd(),
       "lib/cloudflare-workers-vercel.ts",
     );
