@@ -15,6 +15,7 @@ export async function BillingPlanCard() {
   const credits = Number(billing?.credits ?? 500);
   const includedCredits = plan === "Pro" ? 5000 : 500;
   const usagePercent = Math.min(100, Math.max(0, (credits / includedCredits) * 100));
+  const lowCredits = credits <= 100;
 
   return (
     <section className="current-plan">
@@ -29,7 +30,7 @@ export async function BillingPlanCard() {
       <div className="usage-meter">
         <div><span>Remaining agent credits</span><b>{credits.toLocaleString("en-IN")} of {includedCredits.toLocaleString("en-IN")}</b></div>
         <i><b style={{ width: `${usagePercent}%` }} /></i>
-        <p>Subscription and credit changes are synchronized by signed Dodo webhooks.</p>
+        <p className={lowCredits ? "low-credit-copy" : ""}>{lowCredits ? "Low balance — at least 20 credits are required to start an agent run." : "Subscription and credit changes are synchronized by signed Dodo webhooks."}</p>
       </div>
       <footer>
         {plan === "Pro" ? <a className="billing-integrations-link" href="/settings">Manage workspace</a> : <CheckoutButton />}
