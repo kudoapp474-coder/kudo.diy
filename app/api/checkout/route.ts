@@ -3,6 +3,15 @@ import { requireApiUser, unauthorized } from "../../../lib/server-auth";
 export async function POST(request: Request) {
   const auth = await requireApiUser();
   if (!auth) return unauthorized();
+  const billing = await auth.db.prepare("SELECT w.plan, s.status, s.subscription_id FROM workspaces w LEFT JOIN billing_subscriptions s ON s.workspace_id = w.id WHERE w.id = ?")
+    .bind(auth.workspaceId).first<{ plan: string; status: string | null; subscription_id: string | null }>();
+  if (billing?.plan === "pro" || ["active", "unpaused"].includes(billing?.status ?? "")) {
+    return Response.json({
+      error: "KODO Pro is already active for this workspace.",
+      code: "ALREADY_SUBSCRIBED",
+      manageUrl: "/billing",
+    }, { status: 409 });
+  }
   const apiKey = process.env.DODO_PAYMENTS_API_KEY;
   const productId = process.env.DODO_PAYMENTS_PRODUCT_ID;
   if (!apiKey || !productId) return Response.json({ error: "Dodo Payments is not connected.", code: "SETUP_REQUIRED", connectUrl: "/integrations" }, { status: 503 });
