@@ -28,10 +28,10 @@ export async function POST(request: Request) {
   await auth.db.prepare("INSERT INTO generations (id, workspace_id, project_id, user_email, model, prompt, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)")
     .bind(generationId, auth.workspaceId, projectId, auth.user.email, MODEL, prompt.slice(0, 12000), timestamp, timestamp).run();
 
-  if (!process.env.AI_GATEWAY_API_KEY) {
+  if (!process.env.AI_GATEWAY_API_KEY && !process.env.VERCEL_OIDC_TOKEN) {
     await auth.db.prepare("UPDATE generations SET status = 'setup_required', error = ?, updated_at = ? WHERE id = ?")
       .bind("AI Gateway is not connected.", now(), generationId).run();
-    return Response.json({ generationId, status: "setup_required", error: "Connect an AI Gateway key in Integrations to run KODO on a real model.", connectUrl: "/integrations" }, { status: 503 });
+    return Response.json({ generationId, status: "setup_required", error: "Connect Vercel AI Gateway in Integrations to run KODO on a real model.", connectUrl: "/integrations" }, { status: 503 });
   }
 
   const steps: Array<{ type: string; label: string; status: string }> = [];
