@@ -1,5 +1,6 @@
 import { ArrowRight, Check, Minus } from "lucide-react";
 import Link from "next/link";
+import { Suspense } from "react";
 import { PublicNav } from "../components/public-nav";
 import { CheckoutButton } from "../components/checkout-button";
 import { CheckoutCancelledStatus } from "../components/checkout-cancelled-status";
@@ -14,7 +15,9 @@ export default function PricingPage() {
   return (
     <main className="public-page">
       <PublicNav />
-      <CheckoutCancelledStatus />
+      <Suspense fallback={null}>
+        <CheckoutCancelledStatus />
+      </Suspense>
       <section className="pricing-hero">
         <p>PLANS THAT SCALE WITH THE WORK</p>
         <h1>Build more.<br />Stay in control.</h1>
