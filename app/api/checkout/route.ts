@@ -1,13 +1,16 @@
 import { requireApiUser, unauthorized } from "../../../lib/server-auth";
+import { hasProAccess, requiresBillingPortal } from "../../../lib/billing-lifecycle";
 
 export async function POST(request: Request) {
   const auth = await requireApiUser();
   if (!auth) return unauthorized();
   const billing = await auth.db.prepare("SELECT w.plan, s.status, s.subscription_id FROM workspaces w LEFT JOIN billing_subscriptions s ON s.workspace_id = w.id WHERE w.id = ?")
     .bind(auth.workspaceId).first<{ plan: string; status: string | null; subscription_id: string | null }>();
-  if (billing?.plan === "pro" || ["active", "unpaused"].includes(billing?.status ?? "")) {
+  if (hasProAccess(billing?.plan, billing?.status) || requiresBillingPortal(billing?.status)) {
     return Response.json({
-      error: "KODO Pro is already active for this workspace.",
+      error: ["on_hold", "paused"].includes(billing?.status ?? "")
+        ? "Your existing subscription needs attention in the billing portal."
+        : "A KODO Pro subscription already exists for this workspace.",
       code: "ALREADY_SUBSCRIBED",
       manageUrl: "/billing",
     }, { status: 409 });
