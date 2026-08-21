@@ -102,3 +102,17 @@ export const usageEvents = sqliteTable("usage_events", {
   metadataJson: text("metadata_json").notNull().default("{}"),
   createdAt: text("created_at").notNull(),
 });
+
+
+export const creditAdjustments = sqliteTable("credit_adjustments", {
+  id: text("id").primaryKey(),
+  workspaceId: text("workspace_id").notNull(),
+  adminEmail: text("admin_email").notNull(),
+  delta: integer("delta").notNull(),
+  reason: text("reason").notNull(),
+  previousBalance: integer("previous_balance").notNull(),
+  newBalance: integer("new_balance").notNull(),
+  status: text("status").notNull().default("pending"),
+  createdAt: text("created_at").notNull(),
+  completedAt: text("completed_at"),
+}, table => [index("credit_adjustments_workspace_idx").on(table.workspaceId, table.createdAt)]);
