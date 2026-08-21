@@ -1,5 +1,6 @@
 import { requireApiUser } from "../../lib/server-auth";
 import { CheckoutButton } from "./checkout-button";
+import { BillingPortalButton } from "./billing-portal-button";
 
 type WorkspaceBilling = {
   plan: string;
@@ -33,7 +34,7 @@ export async function BillingPlanCard() {
         <p className={lowCredits ? "low-credit-copy" : ""}>{lowCredits ? "Low balance — at least 20 credits are required to start an agent run." : "Subscription and credit changes are synchronized by signed Dodo webhooks."}</p>
       </div>
       <footer>
-        {plan === "Pro" ? <a className="billing-integrations-link" href="/settings">Manage workspace</a> : <CheckoutButton />}
+        {plan === "Pro" ? <BillingPortalButton /> : <CheckoutButton />}
         <a className="billing-integrations-link" href="/integrations">Billing setup</a>
       </footer>
     </section>
