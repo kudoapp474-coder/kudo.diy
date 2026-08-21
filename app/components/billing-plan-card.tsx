@@ -1,6 +1,7 @@
 import { requireApiUser } from "../../lib/server-auth";
 import { CheckoutButton } from "./checkout-button";
 import { BillingPortalButton } from "./billing-portal-button";
+import { BillingCheckoutStatus } from "./billing-checkout-status";
 
 type WorkspaceBilling = {
   plan: string;
@@ -30,6 +31,7 @@ export async function BillingPlanCard() {
 
   return (
     <section className="current-plan">
+      <BillingCheckoutStatus isPro={plan === "Pro"} />
       <header>
         <div>
           <span>CURRENT PLAN</span>
