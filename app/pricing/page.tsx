@@ -1,6 +1,8 @@
 import { ArrowRight, Check, Minus } from "lucide-react";
+import Link from "next/link";
 import { PublicNav } from "../components/public-nav";
 import { CheckoutButton } from "../components/checkout-button";
+import { CheckoutCancelledStatus } from "../components/checkout-cancelled-status";
 
 const plans = [
   { name: "Free", price: "₹0", desc: "Explore KODO and build your first project.", cta: "Start free", href: "/signup", features: ["500 agent credits / month", "2 active projects", "Public repositories", "Preview deployments"] },
@@ -12,6 +14,7 @@ export default function PricingPage() {
   return (
     <main className="public-page">
       <PublicNav />
+      <CheckoutCancelledStatus />
       <section className="pricing-hero">
         <p>PLANS THAT SCALE WITH THE WORK</p>
         <h1>Build more.<br />Stay in control.</h1>
@@ -61,7 +64,7 @@ export default function PricingPage() {
       </section>
       <footer className="marketing-footer">
         <span>© 2026 KODO.DIY</span>
-        <div><a href="/">Home</a><a href="/docs">Docs</a><a href="mailto:hello@kodo.diy">Contact</a></div>
+        <div><Link href="/">Home</Link><Link href="/docs">Docs</Link><a href="mailto:hello@kodo.diy">Contact</a></div>
         <span>Build ambitious software.</span>
       </footer>
     </main>
