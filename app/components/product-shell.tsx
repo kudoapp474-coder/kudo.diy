@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { isKodoAdmin } from "../../lib/admin-auth";
 import { requireApiUser } from "../../lib/server-auth";
+import { AccountMenu } from "./account-menu";
 import { BrandLogo } from "./brand-logo";
 
 const navigation = [
@@ -51,6 +52,7 @@ export async function ProductShell({ active, title, context, children, actions }
   const creditPercent = Math.min(100, Math.max(0, (credits / includedCredits) * 100));
   const lowCredits = credits <= 100;
   const initial = (auth?.user.displayName?.trim().charAt(0) || "U").toUpperCase();
+  const clerkEnabled = Boolean(process.env.CLERK_SECRET_KEY && process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
   return (
     <main className="product-shell">
@@ -58,7 +60,7 @@ export async function ProductShell({ active, title, context, children, actions }
         <a className="product-logo" href="/"><BrandLogo size="compact" /></a>
         <div className="top-project"><span className="mini-avatar">{initial}</span><b>{workspaceName}</b><ChevronDown size={13} /></div>
         <button className="global-search"><Search size={15} /><span>Search projects, agents, and files</span><kbd>⌘ K</kbd></button>
-        <div className="product-top-actions"><button aria-label="Notifications"><Bell size={17} /><i /></button><a href="/billing"><Zap size={14} /> {credits.toLocaleString("en-IN")} credits</a><span className="user-avatar">{initial}</span></div>
+        <div className="product-top-actions"><button aria-label="Notifications"><Bell size={17} /><i /></button><a href="/billing"><Zap size={14} /> {credits.toLocaleString("en-IN")} credits</a>{clerkEnabled ? <AccountMenu displayName={auth.user.displayName} email={auth.user.email} initial={initial} /> : <span className="user-avatar">{initial}</span>}</div>
         <details className="product-mobile-menu"><summary aria-label="Open navigation"><Menu size={19} /></summary><div><div className="mobile-menu-title"><BrandLogo size="compact" /><X size={17} /></div>{navigationItems.map((item) => <a className={active === item.label.toLowerCase() ? "active" : ""} href={item.href} key={item.href}><item.icon size={16} />{item.label}</a>)}<a href="/settings"><Settings size={16} />Settings</a></div></details>
       </header>
 
