@@ -7,10 +7,20 @@ type WorkspaceBilling = {
   credits: number;
 };
 
+type SubscriptionBilling = {
+  subscription_id: string;
+  status: string;
+  next_billing_date: string | null;
+  cancel_at_next_billing_date: number;
+};
+
 export async function BillingPlanCard() {
   const auth = await requireApiUser();
   const billing = auth
     ? await auth.db.prepare("SELECT plan, credits FROM workspaces WHERE id = ?").bind(auth.workspaceId).first<WorkspaceBilling>()
+    : null;
+  const subscription = auth
+    ? await auth.db.prepare("SELECT subscription_id, status, next_billing_date, cancel_at_next_billing_date FROM billing_subscriptions WHERE workspace_id = ?").bind(auth.workspaceId).first<SubscriptionBilling>()
     : null;
   const plan = billing?.plan === "pro" ? "Pro" : "Free";
   const credits = Number(billing?.credits ?? 500);
@@ -33,6 +43,11 @@ export async function BillingPlanCard() {
         <i><b style={{ width: `${usagePercent}%` }} /></i>
         <p className={lowCredits ? "low-credit-copy" : ""}>{lowCredits ? "Low balance — at least 20 credits are required to start an agent run." : "Subscription and credit changes are synchronized by signed Dodo webhooks."}</p>
       </div>
+      {subscription && <div className="subscription-facts">
+        <div><span>Subscription status</span><b>{subscription.cancel_at_next_billing_date ? "Cancels after current period" : subscription.status.replaceAll("_", " ")}</b></div>
+        <div><span>{subscription.cancel_at_next_billing_date ? "Access until" : "Next renewal"}</span><b>{subscription.next_billing_date ? new Date(subscription.next_billing_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "Managed by Dodo"}</b></div>
+        <div><span>Reference</span><b>{subscription.subscription_id.slice(0, 8)}…</b></div>
+      </div>}
       <footer>
         {plan === "Pro" ? <BillingPortalButton /> : <CheckoutButton />}
         <a className="billing-integrations-link" href="/integrations">Billing setup</a>

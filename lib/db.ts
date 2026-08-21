@@ -81,6 +81,7 @@ export async function ensureDatabase() {
     db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS connections_provider_idx ON connections(workspace_id, provider)"),
     db.prepare("CREATE TABLE IF NOT EXISTS usage_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, generation_id TEXT, kind TEXT NOT NULL, units INTEGER NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS billing_events (event_id TEXT PRIMARY KEY, provider TEXT NOT NULL, event_type TEXT NOT NULL, workspace_id TEXT, payload_json TEXT NOT NULL, processed_at TEXT NOT NULL)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS billing_subscriptions (workspace_id TEXT PRIMARY KEY, provider TEXT NOT NULL, subscription_id TEXT NOT NULL, customer_id TEXT, product_id TEXT, status TEXT NOT NULL, next_billing_date TEXT, cancel_at_next_billing_date INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)"),
   ]);
   return db;
 }
