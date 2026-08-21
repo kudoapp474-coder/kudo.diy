@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { redirect } from "next/navigation";
 import {
   Bell,
   Bot,
@@ -34,6 +35,7 @@ type WorkspaceBilling = {
 
 export async function ProductShell({ active, title, context, children, actions }: { active: string; title: string; context?: string; children: ReactNode; actions?: ReactNode }) {
   const auth = await requireApiUser();
+  if (!auth) redirect("/login");
   const billing = auth
     ? await auth.db.prepare("SELECT name, plan, credits FROM workspaces WHERE id = ?").bind(auth.workspaceId).first<WorkspaceBilling>()
     : null;
