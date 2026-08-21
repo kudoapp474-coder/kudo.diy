@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1787289690531,
+      "tag": "0000_motionless_wallop",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787289713397,
+      "tag": "0001_famous_mariko_yashida",
+      "breakpoints": true
+    }
+  ]
+}

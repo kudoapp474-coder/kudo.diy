@@ -1,0 +1,17 @@
+import { all } from "../../../../lib/db";
+import { requireApiUser, unauthorized } from "../../../../lib/server-auth";
+
+export async function GET() {
+  const auth = await requireApiUser();
+  if (!auth) return unauthorized();
+  const connections = await all<{ provider: string; status: string; account_label: string | null; updated_at: string }>(auth.db.prepare("SELECT provider, status, account_label, updated_at FROM connections WHERE workspace_id = ?").bind(auth.workspaceId));
+  const saved = new Map(connections.map(connection => [connection.provider, connection]));
+  return Response.json({
+    integrations: [
+      { id: "ai", name: "AI Gateway", configured: Boolean(process.env.AI_GATEWAY_API_KEY), status: process.env.AI_GATEWAY_API_KEY ? "ready" : "setup_required", model: "openai/gpt-5.6-sol" },
+      { id: "github", name: "GitHub App", configured: Boolean(process.env.GITHUB_APP_SLUG && process.env.GITHUB_APP_ID && process.env.GITHUB_APP_PRIVATE_KEY), status: saved.get("github")?.status ?? "disconnected", account: saved.get("github")?.account_label ?? null },
+      { id: "sandbox", name: "Secure Sandbox", configured: Boolean(process.env.SANDBOX_API_URL && process.env.SANDBOX_API_TOKEN), status: process.env.SANDBOX_API_URL && process.env.SANDBOX_API_TOKEN ? "ready" : "setup_required" },
+      { id: "dodo", name: "Dodo Payments", configured: Boolean(process.env.DODO_PAYMENTS_API_KEY && process.env.DODO_PAYMENTS_PRODUCT_ID && process.env.DODO_PAYMENTS_WEBHOOK_KEY), status: process.env.DODO_PAYMENTS_API_KEY && process.env.DODO_PAYMENTS_PRODUCT_ID && process.env.DODO_PAYMENTS_WEBHOOK_KEY ? "ready" : "setup_required" },
+    ],
+  });
+}
