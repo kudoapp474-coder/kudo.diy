@@ -5,6 +5,7 @@ import { requireApiUser, unauthorized } from "../../../lib/server-auth";
 import { nativeSandboxConfigured, runProjectChecks } from "../../../lib/vercel-sandbox";
 
 const MODEL = "openai/gpt-5.6-sol";
+const RUN_RESERVATION_CREDITS = 20;
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
@@ -22,18 +23,24 @@ export async function POST(request: Request) {
     await auth.db.prepare("INSERT INTO projects (id, workspace_id, name, description, branch, status, created_at, updated_at) VALUES (?, ?, ?, 'Created from KODO workspace', 'main', 'draft', ?, ?)")
       .bind(projectId, auth.workspaceId, projectId.replaceAll("-", " ").slice(0, 100), timestamp, timestamp).run();
   }
-  const workspace = await auth.db.prepare("SELECT credits FROM workspaces WHERE id = ?").bind(auth.workspaceId).first<{ credits: number }>();
-  if (!workspace || workspace.credits < 20) return Response.json({ error: "Not enough credits. Recharge before starting this agent.", code: "INSUFFICIENT_CREDITS" }, { status: 402 });
+  if (!process.env.AI_GATEWAY_API_KEY && !process.env.VERCEL_OIDC_TOKEN) {
+    return Response.json({ status: "setup_required", error: "Connect Vercel AI Gateway in Integrations to run KODO on a real model.", connectUrl: "/integrations" }, { status: 503 });
+  }
+
+  const reservation = await auth.db.prepare("UPDATE workspaces SET credits = credits - ? WHERE id = ? AND credits >= ?")
+    .bind(RUN_RESERVATION_CREDITS, auth.workspaceId, RUN_RESERVATION_CREDITS).run();
+  if ((reservation.meta?.changes ?? 0) === 0) {
+    return Response.json({ error: "Not enough credits. Recharge before starting this agent.", code: "INSUFFICIENT_CREDITS", creditsRequired: RUN_RESERVATION_CREDITS }, { status: 402 });
+  }
 
   const generationId = id("gen");
   const timestamp = now();
-  await auth.db.prepare("INSERT INTO generations (id, workspace_id, project_id, user_email, model, prompt, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)")
-    .bind(generationId, auth.workspaceId, projectId, auth.user.email, MODEL, prompt.slice(0, 12000), timestamp, timestamp).run();
-
-  if (!process.env.AI_GATEWAY_API_KEY && !process.env.VERCEL_OIDC_TOKEN) {
-    await auth.db.prepare("UPDATE generations SET status = 'setup_required', error = ?, updated_at = ? WHERE id = ?")
-      .bind("AI Gateway is not connected.", now(), generationId).run();
-    return Response.json({ generationId, status: "setup_required", error: "Connect Vercel AI Gateway in Integrations to run KODO on a real model.", connectUrl: "/integrations" }, { status: 503 });
+  try {
+    await auth.db.prepare("INSERT INTO generations (id, workspace_id, project_id, user_email, model, prompt, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)")
+      .bind(generationId, auth.workspaceId, projectId, auth.user.email, MODEL, prompt.slice(0, 12000), timestamp, timestamp).run();
+  } catch (error) {
+    await auth.db.prepare("UPDATE workspaces SET credits = credits + ? WHERE id = ?").bind(RUN_RESERVATION_CREDITS, auth.workspaceId).run();
+    throw error;
   }
 
   const steps: Array<{ type: string; label: string; status: string }> = [];
@@ -104,16 +111,21 @@ export async function POST(request: Request) {
     const inputTokens = result.totalUsage.inputTokens ?? 0;
     const outputTokens = result.totalUsage.outputTokens ?? 0;
     const creditsUsed = Math.max(20, Math.ceil((inputTokens + outputTokens) / 100));
+    const additionalCredits = Math.max(0, creditsUsed - RUN_RESERVATION_CREDITS);
     await auth.db.batch([
       auth.db.prepare("UPDATE generations SET result = ?, steps_json = ?, status = 'complete', input_tokens = ?, output_tokens = ?, credits_used = ?, updated_at = ? WHERE id = ?").bind(result.text, JSON.stringify(steps), inputTokens, outputTokens, creditsUsed, now(), generationId),
-      auth.db.prepare("UPDATE workspaces SET credits = MAX(0, credits - ?) WHERE id = ?").bind(creditsUsed, auth.workspaceId),
-      auth.db.prepare("INSERT INTO usage_events (id, workspace_id, generation_id, kind, units, metadata_json, created_at) VALUES (?, ?, ?, 'agent_tokens', ?, ?, ?)").bind(id("use"), auth.workspaceId, generationId, inputTokens + outputTokens, JSON.stringify({ model: MODEL, creditsUsed }), now()),
+      auth.db.prepare("UPDATE workspaces SET credits = MAX(0, credits - ?) WHERE id = ?").bind(additionalCredits, auth.workspaceId),
+      auth.db.prepare("INSERT INTO usage_events (id, workspace_id, generation_id, kind, units, metadata_json, created_at) VALUES (?, ?, ?, 'agent_credit', ?, ?, ?)").bind(id("use"), auth.workspaceId, generationId, creditsUsed, JSON.stringify({ model: MODEL, creditsUsed, inputTokens, outputTokens, sandboxChecks: steps.filter(step => step.type === "test").length }), now()),
       auth.db.prepare("UPDATE projects SET updated_at = ? WHERE id = ? AND workspace_id = ?").bind(now(), projectId, auth.workspaceId),
     ]);
-    return Response.json({ generationId, status: "complete", result: result.text, steps, usage: { inputTokens, outputTokens, creditsUsed }, model: MODEL });
+    const balance = await auth.db.prepare("SELECT credits FROM workspaces WHERE id = ?").bind(auth.workspaceId).first<{ credits: number }>();
+    return Response.json({ generationId, status: "complete", result: result.text, steps, usage: { inputTokens, outputTokens, creditsUsed, creditsRemaining: balance?.credits ?? 0 }, model: MODEL });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Agent failed";
-    await auth.db.prepare("UPDATE generations SET status = 'error', error = ?, steps_json = ?, updated_at = ? WHERE id = ?").bind(message.slice(0, 1000), JSON.stringify(steps), now(), generationId).run();
+    await auth.db.batch([
+      auth.db.prepare("UPDATE generations SET status = 'error', error = ?, steps_json = ?, updated_at = ? WHERE id = ?").bind(message.slice(0, 1000), JSON.stringify(steps), now(), generationId),
+      auth.db.prepare("UPDATE workspaces SET credits = credits + ? WHERE id = ?").bind(RUN_RESERVATION_CREDITS, auth.workspaceId),
+    ]);
     return Response.json({ generationId, status: "error", error: "The agent could not complete this run. Check the AI connection and try again." }, { status: 502 });
   }
 }
