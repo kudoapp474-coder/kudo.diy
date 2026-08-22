@@ -55,3 +55,26 @@ test("wires the real prompt-to-publish builder flow", async () => {
   assert.match(publicProject, /renderProjectDocument/);
   assert.doesNotMatch(builder, /Acme Labs|fake code|fake publish/i);
 });
+
+test("wires live GitHub repository connections", async () => {
+  const [views, manager, repositoriesApi, connectApi, callbackApi, githubApp] = await Promise.all([
+    readFile(new URL("../app/components/product-views.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/repositories-manager.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/github/repositories/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/github/connect/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/github/callback/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/github-app.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(views, /api\/github\/connect\?returnTo=\/repositories/);
+  assert.match(manager, /fetch\("\/api\/github\/repositories"/);
+  assert.match(repositoriesApi, /installation\/repositories\?per_page=100/);
+  assert.match(repositoriesApi, /getGitHubInstallationToken/);
+  assert.match(connectApi, /JSON\.stringify\(\{ state, returnTo \}\)/);
+  assert.match(callbackApi, /destination\.searchParams\.set\("connected", "github"\)/);
+  assert.match(callbackApi, /DELETE FROM connections WHERE workspace_id = \? AND provider = 'github_oauth_state'/);
+  assert.match(githubApp, /normalizeGitHubPrivateKey/);
+  assert.match(githubApp, /base64-encoded PEM/);
+  assert.match(githubApp, /complete PEM contents/);
+  assert.doesNotMatch(views, /kodo\/web|kodo\/dashboard/);
+});
