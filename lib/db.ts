@@ -97,6 +97,9 @@ export async function ensureDatabase() {
     db.prepare("CREATE TABLE IF NOT EXISTS credit_adjustments (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, admin_email TEXT NOT NULL, delta INTEGER NOT NULL, reason TEXT NOT NULL, previous_balance INTEGER NOT NULL, new_balance INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, completed_at TEXT)"),
     db.prepare("CREATE INDEX IF NOT EXISTS credit_adjustments_workspace_idx ON credit_adjustments(workspace_id, created_at)"),
     db.prepare("CREATE TABLE IF NOT EXISTS workspace_settings (workspace_id TEXT PRIMARY KEY, permissions_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS workspace_members (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'member', status TEXT NOT NULL DEFAULT 'invited', invited_by TEXT NOT NULL, invite_token TEXT, created_at TEXT NOT NULL, joined_at TEXT)"),
+    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS workspace_members_email_idx ON workspace_members(workspace_id, email)"),
+    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS workspace_members_token_idx ON workspace_members(invite_token)"),
   ]);
   try { await db.prepare("ALTER TABLE automations ADD COLUMN project_id TEXT").run(); } catch { /* already migrated */ }
   return db;

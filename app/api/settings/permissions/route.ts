@@ -1,10 +1,12 @@
 import { now } from "../../../../lib/db";
 import { normalizePermissions } from "../../../../lib/permissions";
 import { requireApiUser, unauthorized } from "../../../../lib/server-auth";
+import { canManageMembers } from "../../../../lib/team";
 
 export async function PATCH(request: Request) {
   const auth = await requireApiUser();
   if (!auth) return unauthorized();
+  if (!canManageMembers(auth.role)) return Response.json({ error: "Only the owner or an admin can change agent permissions." }, { status: 403 });
   const body = await request.json() as { permissions?: Record<string, unknown> };
   if (!body.permissions || typeof body.permissions !== "object") {
     return Response.json({ error: "permissions object is required." }, { status: 400 });

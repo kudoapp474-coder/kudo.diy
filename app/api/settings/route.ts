@@ -1,5 +1,6 @@
 import { normalizePermissions } from "../../../lib/permissions";
 import { requireApiUser, unauthorized } from "../../../lib/server-auth";
+import { canManageMembers } from "../../../lib/team";
 
 type WorkspaceRow = { name: string; slug: string; plan: string; owner_email: string };
 type SettingsRow = { permissions_json: string };
@@ -22,6 +23,7 @@ export async function GET() {
   return Response.json({
     workspace,
     member: { email: auth.user.email, name: auth.user.displayName },
+    role: auth.role,
     permissions: normalizePermissions(parsed),
   });
 }
@@ -29,6 +31,7 @@ export async function GET() {
 export async function PATCH(request: Request) {
   const auth = await requireApiUser();
   if (!auth) return unauthorized();
+  if (!canManageMembers(auth.role)) return Response.json({ error: "Only the owner or an admin can change workspace settings." }, { status: 403 });
   const body = await request.json() as { name?: string; slug?: string };
 
   const name = body.name?.trim();

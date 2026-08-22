@@ -1,6 +1,10 @@
 import { auth, currentUser } from "@clerk/nextjs/server";
+import { cookies } from "next/headers";
 import { getChatGPTUser } from "../app/chatgpt-auth";
-import { ensureDatabase, now } from "./db";
+import { ensureDatabase, id, now } from "./db";
+import type { MemberRole } from "./team";
+
+export const ACTIVE_WORKSPACE_COOKIE = "kodo_active_workspace";
 
 export async function requireApiUser() {
   let user = await getChatGPTUser();
@@ -20,10 +24,26 @@ export async function requireApiUser() {
 
   if (!user) return null;
   const db = await ensureDatabase();
-  const workspaceId = `ws_${user.email.toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 44)}`;
+  const ownWorkspaceId = `ws_${user.email.toLowerCase().replace(/[^a-z0-9]/g, "_").slice(0, 44)}`;
+  const ownerEmail = user.email.toLowerCase();
+
   await db.prepare("INSERT OR IGNORE INTO workspaces (id, owner_email, name, slug, plan, credits, created_at) VALUES (?, ?, ?, ?, 'free', 500, ?)")
-    .bind(workspaceId, user.email, `${user.displayName}'s Workspace`, workspaceId.slice(3), now()).run();
-  return { user, workspaceId, db };
+    .bind(ownWorkspaceId, user.email, `${user.displayName}'s Workspace`, ownWorkspaceId.slice(3), now()).run();
+  await db.prepare("INSERT INTO workspace_members (id, workspace_id, email, role, status, invited_by, created_at, joined_at) VALUES (?, ?, ?, 'owner', 'active', ?, ?, ?) ON CONFLICT(workspace_id, email) DO NOTHING")
+    .bind(id("member"), ownWorkspaceId, ownerEmail, ownerEmail, now(), now()).run();
+
+  let workspaceId = ownWorkspaceId;
+  let role: MemberRole = "owner";
+
+  const store = await cookies();
+  const requested = store.get(ACTIVE_WORKSPACE_COOKIE)?.value;
+  if (requested && requested !== ownWorkspaceId) {
+    const membership = await db.prepare("SELECT role FROM workspace_members WHERE workspace_id = ? AND email = ? AND status = 'active'")
+      .bind(requested, ownerEmail).first<{ role: MemberRole }>();
+    if (membership) { workspaceId = requested; role = membership.role; }
+  }
+
+  return { user, workspaceId, role, db };
 }
 
 export function unauthorized() {
