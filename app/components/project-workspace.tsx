@@ -4,11 +4,12 @@ import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowUp, Check, ChevronDown, CircleAlert, Code2, Download, ExternalLink, Eye, File, FileCode2,
-  Folder, GitBranch, Github, Globe, History, LoaderCircle, MoreHorizontal, Paperclip, Play, Plus,
+  Folder, GitBranch, Github, Globe, History, LoaderCircle, MoreHorizontal, Paperclip, Plus,
   RefreshCw, RotateCcw, Save, Settings2, Sparkles, Terminal, Trash2, X,
 } from "lucide-react";
 import { renderProjectDocument } from "../../lib/project-files";
 import { BrandLogo } from "./brand-logo";
+import { PublishingManager } from "./publishing-manager";
 
 type ProjectFile = { id: string; path: string; content: string; language: string; updated_at: string };
 type Generation = { id: string; prompt: string; result: string | null; status: string; model: string; credits_used: number; error: string | null; steps_json: string; created_at: string };
@@ -132,7 +133,6 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
   const selectedFile = data?.files.find(file => file.path === selectedPath) ?? null;
   const editorValue = drafts[selectedPath] ?? selectedFile?.content ?? "";
   const dirty = Boolean(selectedFile && editorValue !== selectedFile.content);
-  const latestDeployment = data?.deployments[0] ?? null;
   const latestGitHubSync = data?.githubSyncs?.[0] ?? null;
   const latestUrl = data?.deployments.find(deployment => deployment.status === "ready" && deployment.url)?.url || data?.project.production_url || data?.project.preview_url;
 
@@ -361,7 +361,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
           {checkOutput ? <section className="builder-console"><header><span><Terminal size={13} /> Secure build output</span><button onClick={() => setCheckOutput("")}><X size={13} /></button></header><pre>{checkOutput}</pre></section> : null}
         </section>
       </div>
-      {publishOpen ? <div className="publish-layer" role="dialog" aria-modal="true"><button className="publish-scrim" onClick={() => setPublishOpen(false)} aria-label="Close" /><section className="publish-dialog"><button className="dialog-close" onClick={() => setPublishOpen(false)}><X size={18} /></button><span className="publish-icon"><Globe size={22} /></span><h2>Build and deploy</h2><p>KODO will run the production build in Vercel Sandbox, freeze a version and create a real Vercel preview or production URL.</p><div className="publish-checks"><span><Check size={13} /> Real project files</span><span><Check size={13} /> Versioned deployment</span><span><Check size={13} /> Live deployment status</span></div>{latestDeployment ? <div className={`latest-deployment ${latestDeployment.status}`}><span>{latestDeployment.status === "ready" ? <Check size={13} /> : latestDeployment.status === "failed" ? <CircleAlert size={13} /> : <LoaderCircle size={13} />} {latestDeployment.environment} · {latestDeployment.status}</span>{latestDeployment.url ? <a href={latestDeployment.url} target="_blank" rel="noreferrer">Open <ExternalLink size={11} /></a> : null}</div> : null}<button className="confirm-publish" disabled={publishing} onClick={() => void publish("production")}><Play size={14} /> {publishing ? "Building and deploying…" : "Deploy production"}</button><button className="preview-publish" disabled={publishing} onClick={() => void publish("preview")}>Create Vercel preview</button></section></div> : null}
+      {publishOpen ? <PublishingManager projectId={projectId} publishing={publishing} onPublish={publish} onClose={() => setPublishOpen(false)} /> : null}
       {githubOpen ? <div className="publish-layer" role="dialog" aria-modal="true">
         <button className="publish-scrim" onClick={() => setGithubOpen(false)} aria-label="Close" />
         <section className="publish-dialog github-dialog">

@@ -71,6 +71,50 @@ export const deployments = sqliteTable("deployments", {
   updatedAt: text("updated_at").notNull(),
 });
 
+export const projectDomains = sqliteTable("project_domains", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").notNull(),
+  domain: text("domain").notNull(),
+  status: text("status").notNull().default("pending"),
+  verificationJson: text("verification_json").notNull().default("[]"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, table => [uniqueIndex("project_domains_name_idx").on(table.projectId, table.domain)]);
+
+export const projectSecrets = sqliteTable("project_secrets", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").notNull(),
+  keyName: text("key_name").notNull(),
+  encryptedValue: text("encrypted_value").notNull(),
+  targetsJson: text("targets_json").notNull().default("[]"),
+  gitBranch: text("git_branch"),
+  syncStatus: text("sync_status").notNull().default("pending"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, table => [uniqueIndex("project_secrets_key_idx").on(table.projectId, table.keyName)]);
+
+export const projectDatabases = sqliteTable("project_databases", {
+  projectId: text("project_id").primaryKey(),
+  provider: text("provider").notNull(),
+  envKey: text("env_key").notNull(),
+  encryptedValue: text("encrypted_value").notNull(),
+  targetsJson: text("targets_json").notNull().default("[]"),
+  syncStatus: text("sync_status").notNull().default("pending"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const projectAuditEvents = sqliteTable("project_audit_events", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id").notNull(),
+  userEmail: text("user_email").notNull(),
+  action: text("action").notNull(),
+  resourceType: text("resource_type").notNull(),
+  resourceId: text("resource_id"),
+  metadataJson: text("metadata_json").notNull().default("{}"),
+  createdAt: text("created_at").notNull(),
+}, table => [index("project_audit_events_project_idx").on(table.projectId, table.createdAt)]);
+
 export const automations = sqliteTable("automations", {
   id: text("id").primaryKey(),
   workspaceId: text("workspace_id").notNull(),
