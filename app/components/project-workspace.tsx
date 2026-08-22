@@ -113,7 +113,8 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
   const selectedFile = data?.files.find(file => file.path === selectedPath) ?? null;
   const editorValue = drafts[selectedPath] ?? selectedFile?.content ?? "";
   const dirty = Boolean(selectedFile && editorValue !== selectedFile.content);
-  const latestUrl = data?.project.production_url || data?.project.preview_url;
+  const latestDeployment = data?.deployments[0] ?? null;
+  const latestUrl = data?.deployments.find(deployment => deployment.status === "ready" && deployment.url)?.url || data?.project.production_url || data?.project.preview_url;
 
   async function runAgent(override?: string) {
     const task = (override ?? prompt).trim();
@@ -185,10 +186,40 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
   async function publish(target: "preview" | "production") {
     if (publishing) return; setPublishing(true); setError("");
     const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/publish`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target }) });
-    const result = await response.json() as { deployment?: { url: string }; error?: string; warning?: string; check?: CheckResult };
+    const result = await response.json() as { deployment?: { id: string; status: string; url: string; provider: string }; error?: string; detail?: string; warning?: string; check?: CheckResult };
     if (!response.ok) { setError(result.error ?? "Publish failed."); if (result.check) setCheckOutput([result.check.stdout, result.check.stderr, result.check.error].filter(Boolean).join("\n\n")); }
-    else { setNotice(`${target === "production" ? "Production" : "Preview"} is live: ${result.deployment?.url}${result.warning ? ` · ${result.warning}` : ""}`); setPublishOpen(false); await loadProject(); }
+    else if (result.deployment) {
+      const label = target === "production" ? "Production" : "Preview";
+      setNotice(result.deployment.status === "ready" ? `${label} is live on ${result.deployment.provider}: ${result.deployment.url}${result.warning ? ` · ${result.warning}` : ""}` : `${label} deployment started on ${result.deployment.provider}.`);
+      setPublishOpen(false);
+      await loadProject();
+      if (result.deployment.status === "building") void pollDeployment(result.deployment.id, label, result.deployment.provider);
+    }
     setPublishing(false);
+  }
+
+  async function pollDeployment(deploymentId: string, label: string, provider: string) {
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise(resolve => setTimeout(resolve, 3_000));
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/deployments/${encodeURIComponent(deploymentId)}`, { cache: "no-store" });
+      const result = await response.json() as { deployment?: { status: string; url: string | null }; error?: string };
+      if (!response.ok) {
+        if (attempt === 19) setError(result.error ?? "Could not refresh deployment status.");
+        continue;
+      }
+      if (result.deployment?.status === "ready") {
+        setNotice(`${label} is live on ${provider}: ${result.deployment.url}`);
+        await loadProject();
+        return;
+      }
+      if (result.deployment?.status === "failed") {
+        setError(`${label} deployment failed on ${provider}.`);
+        await loadProject();
+        return;
+      }
+    }
+    setNotice(`${label} is still building on ${provider}. Its status will remain in project history.`);
+    await loadProject();
   }
 
   async function exportToGitHub() {
@@ -240,7 +271,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
           {checkOutput ? <section className="builder-console"><header><span><Terminal size={13} /> Secure build output</span><button onClick={() => setCheckOutput("")}><X size={13} /></button></header><pre>{checkOutput}</pre></section> : null}
         </section>
       </div>
-      {publishOpen ? <div className="publish-layer" role="dialog" aria-modal="true"><button className="publish-scrim" onClick={() => setPublishOpen(false)} aria-label="Close" /><section className="publish-dialog"><button className="dialog-close" onClick={() => setPublishOpen(false)}><X size={18} /></button><span className="publish-icon"><Globe size={22} /></span><h2>Build and publish</h2><p>KODO will run the production build in Vercel Sandbox, freeze a version and create a secure live URL.</p><div className="publish-checks"><span><Check size={13} /> Real project files</span><span><Check size={13} /> Versioned deployment</span><span><Check size={13} /> Isolated public page</span></div><button className="confirm-publish" disabled={publishing} onClick={() => void publish("production")}><Play size={14} /> {publishing ? "Building and publishing…" : "Publish production"}</button><button className="preview-publish" disabled={publishing} onClick={() => void publish("preview")}>Create preview URL</button></section></div> : null}
+      {publishOpen ? <div className="publish-layer" role="dialog" aria-modal="true"><button className="publish-scrim" onClick={() => setPublishOpen(false)} aria-label="Close" /><section className="publish-dialog"><button className="dialog-close" onClick={() => setPublishOpen(false)}><X size={18} /></button><span className="publish-icon"><Globe size={22} /></span><h2>Build and deploy</h2><p>KODO will run the production build in Vercel Sandbox, freeze a version and create a real Vercel preview or production URL.</p><div className="publish-checks"><span><Check size={13} /> Real project files</span><span><Check size={13} /> Versioned deployment</span><span><Check size={13} /> Live deployment status</span></div>{latestDeployment ? <div className={`latest-deployment ${latestDeployment.status}`}><span>{latestDeployment.status === "ready" ? <Check size={13} /> : latestDeployment.status === "failed" ? <CircleAlert size={13} /> : <LoaderCircle size={13} />} {latestDeployment.environment} · {latestDeployment.status}</span>{latestDeployment.url ? <a href={latestDeployment.url} target="_blank" rel="noreferrer">Open <ExternalLink size={11} /></a> : null}</div> : null}<button className="confirm-publish" disabled={publishing} onClick={() => void publish("production")}><Play size={14} /> {publishing ? "Building and deploying…" : "Deploy production"}</button><button className="preview-publish" disabled={publishing} onClick={() => void publish("preview")}>Create Vercel preview</button></section></div> : null}
       {githubOpen ? <div className="publish-layer" role="dialog" aria-modal="true"><button className="publish-scrim" onClick={() => setGithubOpen(false)} aria-label="Close" /><section className="publish-dialog github-dialog"><button className="dialog-close" onClick={() => setGithubOpen(false)}><X size={18} /></button><span className="publish-icon"><Github size={22} /></span><h2>Commit to GitHub</h2><p>Export every text file as one atomic commit to a branch in a repository connected to the KODO GitHub App.</p><label>Repository<input value={githubRepository} onChange={event => setGithubRepository(event.target.value)} placeholder="owner/repository" /></label><label>Branch (optional)<input value={githubBranch} onChange={event => setGithubBranch(event.target.value)} placeholder="kodo/my-project" /></label><button className="confirm-publish" disabled={!githubRepository.trim() || githubBusy} onClick={() => void exportToGitHub()}><GitBranch size={14} /> {githubBusy ? "Creating commit…" : "Commit project"}</button><a className="github-connect-link" href="/api/github/connect">Connect or update GitHub access</a></section></div> : null}
     </main>
   );

@@ -118,6 +118,20 @@ DODO_PAYMENTS_ENVIRONMENT=test_mode
 - Subscribe the endpoint to `subscription.active`, `subscription.renewed`, `subscription.cancelled`, `subscription.failed`, and `subscription.expired`, then copy its signing key.
 - Use `test_mode` while validating checkout and webhook delivery; switch to `live_mode` only with matching live credentials.
 
+## Generated Project Deployments
+
+KODO can publish generated project files to dedicated Vercel preview and production URLs after the Vercel Sandbox build passes. Configure these server-side variables for both Production and Preview:
+
+```bash
+VERCEL_TOKEN=
+VERCEL_TEAM_ID=
+```
+
+- Create a scoped Vercel access token for the account that owns the KODO project.
+- Use the team ID that owns the generated deployments (`team_...`), not the KODO app project ID.
+- When these variables are unavailable, KODO keeps the project accessible on its secure `/p/:projectId` URL and reports that fallback explicitly.
+- Never expose the token through a `NEXT_PUBLIC_` variable or commit it to the repository.
+
 ## Learn More
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)

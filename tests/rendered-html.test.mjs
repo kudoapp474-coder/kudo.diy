@@ -34,12 +34,14 @@ test("renders the production landing page", async () => {
 });
 
 test("wires the real prompt-to-publish builder flow", async () => {
-  const [workspace, builder, projectApi, agentApi, publishApi, publicProject] = await Promise.all([
+  const [workspace, builder, projectApi, agentApi, publishApi, deploymentApi, vercelPublish, publicProject] = await Promise.all([
     readFile(new URL("../app/components/workspace-composer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/project-workspace.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/projects/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/agent/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/projects/[projectId]/publish/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/projects/[projectId]/deployments/[deploymentId]/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/vercel-publish.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/p/[projectId]/route.ts", import.meta.url), "utf8"),
   ]);
 
@@ -51,7 +53,12 @@ test("wires the real prompt-to-publish builder flow", async () => {
   assert.match(builder, /\/publish`/);
   assert.match(agentApi, /openai\/gpt-5\.6-sol/);
   assert.match(agentApi, /runProjectChecks/);
-  assert.match(publishApi, /status = 'ready'/);
+  assert.match(publishApi, /provider: realDeployment \? "Vercel"/);
+  assert.match(publishApi, /status: deploymentStatus/);
+  assert.match(deploymentApi, /refreshVercelDeployment/);
+  assert.match(vercelPublish, /api\.vercel\.com\/v13\/deployments/);
+  assert.match(vercelPublish, /waitForDeployment/);
+  assert.match(builder, /pollDeployment/);
   assert.match(publicProject, /renderProjectDocument/);
   assert.doesNotMatch(builder, /Acme Labs|fake code|fake publish/i);
 });
