@@ -185,23 +185,38 @@ test("imports a connected GitHub repository before the first agent run", async (
 
 
 test("wires a verified model selector through generation history and usage", async () => {
-  const [models, workspace, page, builder, agentApi] = await Promise.all([
+  const [models, workspace, page, builder, agentApi, adminBilling] = await Promise.all([
     readFile(new URL("../lib/agent-models.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/components/workspace-composer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/project/[projectId]/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/project-workspace.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/agent/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/admin/billing/page.tsx", import.meta.url), "utf8"),
   ]);
 
   assert.match(models, /openai\/gpt-5\.4/);
   assert.match(models, /openai\/gpt-5\.3-codex/);
   assert.match(models, /openai\/gpt-5\.4-mini/);
+  assert.match(models, /creditMultiplier: 0\.3/);
+  assert.match(models, /minimumCredits: 6/);
+  assert.match(models, /calculateAgentCredits/);
+  assert.match(models, /estimateAgentCostUsd/);
+  assert.match(models, /AGENT_RUN_RESERVATION_CREDITS = 20/);
   assert.match(workspace, /task: prompt, model: selectedModel/);
+  assert.match(workspace, /model\.creditLabel/);
   assert.match(page, /initialModel=/);
   assert.match(builder, /body: JSON\.stringify\(\{ projectId, prompt: task, model: selectedModel \}\)/);
   assert.match(builder, /generation\.model/);
   assert.match(agentApi, /code: "INVALID_MODEL"/);
   assert.match(agentApi, /model: selectedModel/);
+  assert.match(agentApi, /calculateAgentCredits\(selectedModel, inputTokens, outputTokens\)/);
+  assert.match(agentApi, /creditAdjustment = creditsUsed - AGENT_RUN_RESERVATION_CREDITS/);
+  assert.match(agentApi, /estimatedCostUsd/);
+  assert.match(agentApi, /code: "UPSTREAM_RATE_LIMITED"/);
+  assert.match(agentApi, /fallbackModel: "openai\/gpt-5\.4-mini"/);
   assert.match(agentApi, /JSON\.stringify\(\{ model: selectedModel/);
+  assert.match(adminBilling, /GROUP BY model/);
+  assert.match(adminBilling, /Gateway cost estimate/);
+  assert.match(adminBilling, /estimateAgentCostUsd/);
   assert.doesNotMatch(workspace + builder + agentApi, /GPT-5\.6 Sol|openai\/gpt-5\.6-sol/);
 });

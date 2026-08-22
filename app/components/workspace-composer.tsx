@@ -115,7 +115,7 @@ export function WorkspaceComposer() {
         {!repositoryLoading && githubConnected ? <div className="composer-repo-list">{repositories.map(repository => <button type="button" className={selectedRepository?.name === repository.name ? "selected" : ""} key={repository.name} onClick={() => { setSelectedRepository(repository); setRepositoryOpen(false); }}><Github size={13}/><span><b>{repository.name}</b><small>{repository.branch} · {repository.private ? "Private" : "Public"} · {repository.language || "Code"}</small></span></button>)}{!repositories.length ? <p>No repositories are available to this GitHub App.</p> : null}</div> : null}
       </div> : null}
       <span/>
-      <label className="composer-model"><Sparkles size={13}/><select value={selectedModel} onChange={event => setSelectedModel(event.target.value as typeof selectedModel)} aria-label="Choose AI model">{AGENT_MODELS.map(model => <option value={model.id} key={model.id}>{model.label}</option>)}</select><ChevronDown size={11}/></label>
+      <label className="composer-model"><Sparkles size={13}/><select value={selectedModel} onChange={event => setSelectedModel(event.target.value as typeof selectedModel)} aria-label="Choose AI model">{AGENT_MODELS.map(model => <option value={model.id} key={model.id}>{model.label} · {model.creditLabel}</option>)}</select><ChevronDown size={11}/></label>
       <button className="composer-submit" disabled={!task.trim() || busy} aria-label="Create project and run KODO"><ArrowRight size={16}/></button>
     </div>
     <footer><span>@ context</span><span>/ commands</span><span>{busy ? selectedRepository ? "Importing repository…" : attachments.length ? "Uploading context…" : "Creating project…" : "⌘ ↵ run"}</span></footer>

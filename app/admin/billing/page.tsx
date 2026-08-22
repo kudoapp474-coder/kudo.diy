@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { all } from "../../../lib/db";
 import { isKodoAdmin } from "../../../lib/admin-auth";
+import { agentModelLabel, estimateAgentCostUsd } from "../../../lib/agent-models";
 import { requireApiUser } from "../../../lib/server-auth";
 import { AdminCreditAdjustment } from "../../components/admin-credit-adjustment";
 import { ProductShell } from "../../components/product-shell";
@@ -46,12 +47,18 @@ type AdjustmentRow = {
 type BuilderSummaryRow = { total_generations: number; completed_generations: number; failed_generations: number; total_deployments: number };
 type GenerationRow = { id: string; project_id: string; project_name: string; prompt: string; status: string; model: string; credits_used: number; created_at: string };
 type DeploymentRow = { id: string; project_id: string; project_name: string; environment: string; status: string; url: string | null; created_at: string };
+type ModelUsageRow = { model: string; total_generations: number; completed_generations: number; input_tokens: number; output_tokens: number; credits_used: number };
 
 function formatDate(value: string | null) {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return value;
   return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" }).format(date);
+}
+
+function formatUsd(value: number | null) {
+  if (value === null) return "—";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: value < 1 ? 4 : 2, maximumFractionDigits: value < 1 ? 4 : 2 }).format(value);
 }
 
 function statusLabel(row: WorkspaceRow) {
@@ -85,7 +92,7 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
   `;
 
   const workspaceStatement = auth.db.prepare(workspaceSql);
-  const [workspaces, summary, billingEvents, adjustments, builderSummary, generations, deployments] = await Promise.all([
+  const [workspaces, summary, billingEvents, adjustments, builderSummary, generations, deployments, modelUsage] = await Promise.all([
     all<WorkspaceRow>(query ? workspaceStatement.bind(like, like, like) : workspaceStatement),
     auth.db.prepare(`
       SELECT
@@ -111,6 +118,16 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
       FROM generations g JOIN projects p ON p.id = g.project_id ORDER BY g.created_at DESC LIMIT 30`)),
     all<DeploymentRow>(auth.db.prepare(`SELECT d.id, d.project_id, p.name AS project_name, d.environment, d.status, d.url, d.created_at
       FROM deployments d JOIN projects p ON p.id = d.project_id ORDER BY d.created_at DESC LIMIT 30`)),
+    all<ModelUsageRow>(auth.db.prepare(`SELECT
+      model,
+      COUNT(*) AS total_generations,
+      SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS completed_generations,
+      COALESCE(SUM(input_tokens), 0) AS input_tokens,
+      COALESCE(SUM(output_tokens), 0) AS output_tokens,
+      COALESCE(SUM(credits_used), 0) AS credits_used
+      FROM generations
+      GROUP BY model
+      ORDER BY credits_used DESC`)),
   ]);
 
   return (
@@ -128,6 +145,29 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
           <article><span>Completed builds</span><strong>{Number(builderSummary?.completed_generations ?? 0).toLocaleString("en-IN")}</strong></article>
           <article><span>Failed builds</span><strong>{Number(builderSummary?.failed_generations ?? 0).toLocaleString("en-IN")}</strong></article>
           <article><span>Deployments</span><strong>{Number(builderSummary?.total_deployments ?? 0).toLocaleString("en-IN")}</strong></article>
+        </section>
+
+        <section className="admin-panel">
+          <header><div><span>AI economics</span><h2>Usage by model</h2></div><small>Gateway-cost estimate uses the verified model catalog snapshot; KODO credits include platform and build overhead.</small></header>
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead><tr><th>Model</th><th>Runs</th><th>Tokens</th><th>Credits used</th><th>Gateway cost estimate</th></tr></thead>
+              <tbody>
+                {modelUsage.map(row => {
+                  const inputTokens = Number(row.input_tokens ?? 0);
+                  const outputTokens = Number(row.output_tokens ?? 0);
+                  return <tr key={row.model}>
+                    <td><b>{agentModelLabel(row.model)}</b><small>{row.model}</small></td>
+                    <td><strong>{Number(row.total_generations).toLocaleString("en-IN")}</strong><small>{Number(row.completed_generations).toLocaleString("en-IN")} completed</small></td>
+                    <td><strong>{(inputTokens + outputTokens).toLocaleString("en-IN")}</strong><small>{inputTokens.toLocaleString("en-IN")} in · {outputTokens.toLocaleString("en-IN")} out</small></td>
+                    <td><strong>{Number(row.credits_used ?? 0).toLocaleString("en-IN")}</strong></td>
+                    <td><strong>{formatUsd(estimateAgentCostUsd(row.model, inputTokens, outputTokens))}</strong></td>
+                  </tr>;
+                })}
+                {!modelUsage.length && <tr><td colSpan={5} className="admin-empty">No model usage recorded yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
         </section>
 
         <section className="admin-panel">
