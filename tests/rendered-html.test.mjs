@@ -214,9 +214,38 @@ test("wires a verified model selector through generation history and usage", asy
   assert.match(agentApi, /estimatedCostUsd/);
   assert.match(agentApi, /code: "UPSTREAM_RATE_LIMITED"/);
   assert.match(agentApi, /fallbackModel: "openai\/gpt-5\.4-mini"/);
-  assert.match(agentApi, /JSON\.stringify\(\{ model: selectedModel/);
+  assert.match(agentApi, /JSON\.stringify\(\{\s*model: selectedModel/);
   assert.match(adminBilling, /GROUP BY model/);
   assert.match(adminBilling, /Gateway cost estimate/);
   assert.match(adminBilling, /estimateAgentCostUsd/);
   assert.doesNotMatch(workspace + builder + agentApi, /GPT-5\.6 Sol|openai\/gpt-5\.6-sol/);
+});
+
+test("enforces rolling AI spend limits and in-run credit budgets", async () => {
+  const [spendPolicy, agentApi, database, adminBilling] = await Promise.all([
+    readFile(new URL("../lib/agent-spend.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/agent/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/db.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/admin/billing/page.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(spendPolicy, /free: 500/);
+  assert.match(spendPolicy, /pro: 5_000/);
+  assert.match(spendPolicy, /team: 15_000/);
+  assert.match(spendPolicy, /workspaceAgentSpendWindow/);
+  assert.match(spendPolicy, /boundedProjectContext/);
+  assert.match(spendPolicy, /agentCreditStopCondition/);
+  assert.match(spendPolicy, /agentStepOutputTokenLimit/);
+  assert.match(agentApi, /code: "DAILY_CREDIT_LIMIT_REACHED"/);
+  assert.match(agentApi, /code: "AGENT_ALREADY_RUNNING"/);
+  assert.match(agentApi, /INSERT OR IGNORE INTO agent_run_locks/);
+  assert.match(agentApi, /prepareStep:/);
+  assert.match(agentApi, /maxOutputTokens:/);
+  assert.match(agentApi, /runCreditBudget/);
+  assert.match(agentApi, /budgetLimited/);
+  assert.match(agentApi, /boundedProjectContext\(files\)/);
+  assert.match(database, /CREATE TABLE IF NOT EXISTS agent_run_locks/);
+  assert.match(adminBilling, /AI spend guardrails/);
+  assert.match(adminBilling, /rolling 24 hours/);
+  assert.match(adminBilling, /agentSpendAlert/);
 });
