@@ -39,6 +39,9 @@ type ChatMessage = { id: string; role: "user" | "agent"; text: string; done?: bo
 type CheckResult = { status?: string; phase?: string; command?: string; stdout?: string; stderr?: string; error?: string };
 type PreviewKind = "desktop" | "mobile";
 
+const MOBILE_PREVIEW_WIDTH = 390;
+const MOBILE_PREVIEW_HEIGHT = 844;
+
 const RUN_PHASES = [
   { type: "read", label: "Inspecting project files" },
   { type: "plan", label: "Planning the experience" },
@@ -101,9 +104,11 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
   const [notice, setNotice] = useState(initialNotice);
   const [previewNonce, setPreviewNonce] = useState(0);
   const [previewOverride, setPreviewOverride] = useState<PreviewKind | null>(null);
+  const [mobilePreviewScale, setMobilePreviewScale] = useState(1);
   const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
   const [runSeconds, setRunSeconds] = useState(0);
   const uploadInput = useRef<HTMLInputElement>(null);
+  const phonePreviewViewport = useRef<HTMLDivElement>(null);
   const autoRunStarted = useRef(false);
   const startInitialRun = useEffectEvent((task: string) => { void runAgent(task); });
 
@@ -181,6 +186,22 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
   const automaticPreviewKind = inferPreviewKind(data);
   const previewKind = previewOverride ?? automaticPreviewKind;
   const currentRunPhase = RUN_PHASES.findIndex(phase => !liveSteps.some(step => step.type === phase.type));
+
+  useEffect(() => {
+    if (view !== "preview" || previewKind !== "mobile") return;
+    const viewport = phonePreviewViewport.current;
+    if (!viewport) return;
+
+    const fitLogicalViewport = () => {
+      const nextScale = Math.min(viewport.clientWidth / MOBILE_PREVIEW_WIDTH, viewport.clientHeight / MOBILE_PREVIEW_HEIGHT);
+      if (Number.isFinite(nextScale) && nextScale > 0) setMobilePreviewScale(nextScale);
+    };
+
+    fitLogicalViewport();
+    const observer = new ResizeObserver(fitLogicalViewport);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [view, previewKind]);
 
   async function runAgent(override?: string) {
     const task = (override ?? prompt).trim();
@@ -415,7 +436,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
           {view === "preview" ? <div className={`live-preview ${previewKind}-preview`}>
             <div className="preview-browser"><div><button>←</button><button>→</button><button onClick={() => setPreviewNonce(value => value + 1)}>↻</button></div>{latestUrl ? <a href={latestUrl} target="_blank" rel="noreferrer">{latestUrl}<ExternalLink size={11} /></a> : <span>Secure instant preview</span>}<small>{previewOverride ? "Manual" : "Auto"} · {previewKind === "mobile" ? "Phone" : "Desktop"}</small></div>
             <div className="preview-stage">
-              {previewKind === "mobile" ? <div className="phone-preview-shell"><div className="phone-speaker" /><iframe key={previewNonce} title={`${data?.project.name ?? "Project"} mobile preview`} srcDoc={previewDocument} sandbox="allow-scripts allow-forms allow-modals allow-popups" /><div className="phone-home-indicator" /></div> : <iframe key={previewNonce} title={`${data?.project.name ?? "Project"} preview`} srcDoc={previewDocument} sandbox="allow-scripts allow-forms allow-modals allow-popups" />}
+              {previewKind === "mobile" ? <div className="phone-preview-shell"><div className="phone-speaker" /><div className="phone-preview-viewport" ref={phonePreviewViewport}><iframe key={previewNonce} title={`${data?.project.name ?? "Project"} mobile preview`} srcDoc={previewDocument} sandbox="allow-scripts allow-forms allow-modals allow-popups" style={{ transform: `scale(${mobilePreviewScale})` }} /></div><div className="phone-home-indicator" /></div> : <iframe key={previewNonce} title={`${data?.project.name ?? "Project"} preview`} srcDoc={previewDocument} sandbox="allow-scripts allow-forms allow-modals allow-popups" />}
             </div>
           </div> : <div className="code-workspace">{showFiles ? <aside className="file-tree"><header><p>EXPLORER</p><button onClick={() => void createFile()} aria-label="New file"><Plus size={13} /></button></header>{data?.files.map(file => <button className={file.path === selectedPath ? "active" : ""} onClick={() => setSelectedPath(file.path)} key={file.id}>{file.path.includes("/") ? <Folder size={13} /> : file.language === "asset" ? <File size={13} /> : <FileCode2 size={13} />}<span>{file.path}</span></button>)}</aside> : null}<section className="editor"><div className="editor-tabs"><span><FileCode2 size={12} /> {selectedPath || "No file"}</span><div><button onClick={downloadFile} aria-label="Download file"><Download size={13} /></button><button onClick={() => void deleteFile()} aria-label="Delete file"><Trash2 size={13} /></button><button className="editor-save" disabled={!dirty || saving} onClick={() => void saveFile()}><Save size={13} /> {saving ? "Saving…" : "Save"}</button></div></div><textarea className="code-editor" value={editorValue} onChange={event => setDrafts(current => ({ ...current, [selectedPath]: event.target.value }))} spellCheck={false} aria-label={`Edit ${selectedPath}`} /><div className="editor-status"><span>{selectedFile?.language ?? "text"}</span><span>{editorValue.length.toLocaleString("en-IN")} characters · UTF-8</span></div></section></div>}
           {showVersions ? <aside className="version-panel"><header><div><span>PROJECT HISTORY</span><h2>Versions & rollback</h2></div><button onClick={() => setShowVersions(false)} aria-label="Close version history"><X size={15} /></button></header><div className="version-safety"><Check size={13} /><span><b>Safe restores</b><small>KODO checkpoints current files before every restore or production rollback.</small></span></div><button className="checkpoint-button" disabled={Boolean(versionBusy)} onClick={() => void createCheckpoint()}>{versionBusy === "checkpoint" ? <LoaderCircle size={13} /> : <Plus size={13} />} {versionBusy === "checkpoint" ? "Creating…" : "Create checkpoint"}</button><div>{data?.versions.map(version => {
