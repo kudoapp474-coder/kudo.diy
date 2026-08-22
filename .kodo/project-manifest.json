@@ -1,0 +1,12 @@
+{
+  "projectId": "prj_d993d927b8634a1cb18b",
+  "projectName": "Build a compact responsive one-page launch",
+  "paths": [
+    "index.html",
+    "package.json",
+    "script.js",
+    "scripts/build.mjs",
+    "styles.css"
+  ],
+  "syncedAt": "2026-08-22T10:59:46.428Z"
+}
