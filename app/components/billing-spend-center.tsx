@@ -11,6 +11,11 @@ type ModelSpendRow = {
   output_tokens: number;
 };
 
+function formatUsd(value: number | null) {
+  if (value === null) return "—";
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: value < 1 ? 4 : 2, maximumFractionDigits: value < 1 ? 4 : 2 }).format(value);
+}
+
 export async function BillingSpendCenter() {
   const auth = await requireApiUser();
   if (!auth) return null;
@@ -55,7 +60,7 @@ export async function BillingSpendCenter() {
             <span>{Number(row.runs).toLocaleString("en-IN")}</span>
             <span>{(inputTokens + outputTokens).toLocaleString("en-IN")}</span>
             <span>{Number(row.credits_used).toLocaleString("en-IN")}</span>
-            <span>${estimateAgentCostUsd(row.model, inputTokens, outputTokens).toFixed(4)}</span>
+            <span>{formatUsd(estimateAgentCostUsd(row.model, inputTokens, outputTokens))}</span>
           </div>;
         })}
         {!modelSpend.length ? <p className="spend-model-empty">No agent runs completed in the last 24 hours.</p> : null}
