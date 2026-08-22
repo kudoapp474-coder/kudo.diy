@@ -14,6 +14,13 @@ test("shows app and game projects inside a mobile device preview", async () => {
   assert.match(workspace, /Auto.*Phone/);
   assert.match(css, /\.phone-preview-shell/);
   assert.match(css, /aspect-ratio:390\/844/);
+  assert.match(workspace, /MOBILE_PREVIEW_WIDTH = 390/);
+  assert.match(workspace, /MOBILE_PREVIEW_HEIGHT = 844/);
+  assert.match(workspace, /new ResizeObserver\(fitLogicalViewport\)/);
+  assert.match(workspace, /transform: `scale\(\$\{mobilePreviewScale\}\)`/);
+  assert.match(css, /\.phone-preview-viewport iframe/);
+  assert.match(css, /width:390px;height:844px/);
+  assert.match(css, /transform-origin:top left/);
 });
 
 test("persists and renders honest live agent stages", async () => {
