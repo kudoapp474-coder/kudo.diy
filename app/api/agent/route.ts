@@ -2,18 +2,22 @@ import { ToolLoopAgent, isStepCount, tool } from "ai";
 import { z } from "zod";
 import { all, id, now } from "../../../lib/db";
 import { safeProjectPath, starterProjectFiles } from "../../../lib/project-files";
+import { DEFAULT_AGENT_MODEL_ID, isAgentModelId } from "../../../lib/agent-models";
 import { requireApiUser, unauthorized } from "../../../lib/server-auth";
 import { nativeSandboxConfigured, runProjectChecks } from "../../../lib/vercel-sandbox";
 
-const MODEL = process.env.KODO_MODEL || "openai/gpt-5.6-sol";
+const CONFIGURED_DEFAULT_MODEL = isAgentModelId(process.env.KODO_MODEL) ? process.env.KODO_MODEL : DEFAULT_AGENT_MODEL_ID;
 const RUN_RESERVATION_CREDITS = 20;
 export const maxDuration = 300;
 
 export async function POST(request: Request) {
   const auth = await requireApiUser();
   if (!auth) return unauthorized();
-  const body = await request.json() as { projectId?: string; prompt?: string };
+  const body = await request.json() as { projectId?: string; prompt?: string; model?: string };
   const prompt = body.prompt?.trim();
+  const requestedModel = body.model?.trim();
+  if (requestedModel && !isAgentModelId(requestedModel)) return Response.json({ error: "This AI model is not available.", code: "INVALID_MODEL" }, { status: 400 });
+  const selectedModel = requestedModel || CONFIGURED_DEFAULT_MODEL;
   const projectId = body.projectId?.trim();
   if (!prompt || !projectId) return Response.json({ error: "projectId and prompt are required." }, { status: 400 });
   const recentRuns = await auth.db.prepare("SELECT COUNT(*) AS count FROM generations WHERE user_email = ? AND created_at > ?").bind(auth.user.email, new Date(Date.now() - 60_000).toISOString()).first<{ count: number }>();
@@ -40,7 +44,7 @@ export async function POST(request: Request) {
   const timestamp = now();
   try {
     await auth.db.prepare("INSERT INTO generations (id, workspace_id, project_id, user_email, model, prompt, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)")
-      .bind(generationId, auth.workspaceId, projectId, auth.user.email, MODEL, prompt.slice(0, 12000), timestamp, timestamp).run();
+      .bind(generationId, auth.workspaceId, projectId, auth.user.email, selectedModel, prompt.slice(0, 12000), timestamp, timestamp).run();
   } catch (error) {
     await auth.db.prepare("UPDATE workspaces SET credits = credits + ? WHERE id = ?").bind(RUN_RESERVATION_CREDITS, auth.workspaceId).run();
     throw error;
@@ -48,7 +52,7 @@ export async function POST(request: Request) {
 
   const steps: Array<{ type: string; label: string; status: string }> = [];
   const agent = new ToolLoopAgent({
-    model: MODEL,
+    model: selectedModel,
     instructions: `You are KODO, a careful production website coding agent. First inspect the existing files, then save a plan, edit only necessary files, run the production build, and create a version.
 The instant preview runtime is a dependency-free static web project. Build the complete experience in index.html, styles.css and script.js. Keep package.json and scripts/build.mjs working. You may use remote HTTPS image/font URLs, but do not add npm dependencies or frameworks unless the user explicitly asks and the static preview can still work.
 Every website must be responsive, accessible, visually polished, and use real copy instead of placeholders. Implement interactions in script.js. Never claim a check passed if the sandbox reports skipped or failed. Keep the final response concise and list the files changed.`,
@@ -122,7 +126,7 @@ Every website must be responsive, accessible, visually polished, and use real co
     await auth.db.batch([
       auth.db.prepare("UPDATE generations SET result = ?, steps_json = ?, status = 'complete', input_tokens = ?, output_tokens = ?, credits_used = ?, updated_at = ? WHERE id = ?").bind(result.text, JSON.stringify(steps), inputTokens, outputTokens, creditsUsed, now(), generationId),
       auth.db.prepare("UPDATE workspaces SET credits = MAX(0, credits - ?) WHERE id = ?").bind(additionalCredits, auth.workspaceId),
-      auth.db.prepare("INSERT INTO usage_events (id, workspace_id, generation_id, kind, units, metadata_json, created_at) VALUES (?, ?, ?, 'agent_credit', ?, ?, ?)").bind(id("use"), auth.workspaceId, generationId, creditsUsed, JSON.stringify({ model: MODEL, creditsUsed, inputTokens, outputTokens, sandboxChecks: steps.filter(step => step.type === "test").length }), now()),
+      auth.db.prepare("INSERT INTO usage_events (id, workspace_id, generation_id, kind, units, metadata_json, created_at) VALUES (?, ?, ?, 'agent_credit', ?, ?, ?)").bind(id("use"), auth.workspaceId, generationId, creditsUsed, JSON.stringify({ model: selectedModel, creditsUsed, inputTokens, outputTokens, sandboxChecks: steps.filter(step => step.type === "test").length }), now()),
       auth.db.prepare("UPDATE projects SET updated_at = ? WHERE id = ? AND workspace_id = ?").bind(now(), projectId, auth.workspaceId),
     ]);
     const savedVersion = await auth.db.prepare("SELECT id FROM versions WHERE project_id = ? AND generation_id = ? LIMIT 1").bind(projectId, generationId).first();
@@ -132,7 +136,7 @@ Every website must be responsive, accessible, visually polished, and use real co
         .bind(id("ver"), projectId, generationId, prompt.slice(0, 100), JSON.stringify(files), now()).run();
     }
     const balance = await auth.db.prepare("SELECT credits FROM workspaces WHERE id = ?").bind(auth.workspaceId).first<{ credits: number }>();
-    return Response.json({ generationId, status: "complete", result: result.text, steps, usage: { inputTokens, outputTokens, creditsUsed, creditsRemaining: balance?.credits ?? 0 }, model: MODEL });
+    return Response.json({ generationId, status: "complete", result: result.text, steps, usage: { inputTokens, outputTokens, creditsUsed, creditsRemaining: balance?.credits ?? 0 }, model: selectedModel });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Agent failed";
     await auth.db.batch([

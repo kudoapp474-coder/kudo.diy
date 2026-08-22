@@ -1,7 +1,8 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useRef, useState } from "react";
-import { ArrowRight, FileText, GitBranch, Github, LoaderCircle, Plus, Sparkles, X } from "lucide-react";
+import { ArrowRight, ChevronDown, FileText, GitBranch, Github, LoaderCircle, Plus, Sparkles, X } from "lucide-react";
+import { AGENT_MODELS, DEFAULT_AGENT_MODEL_ID } from "../../lib/agent-models";
 
 const MAX_CONTEXT_FILES = 5;
 const MAX_CONTEXT_FILE_BYTES = 10 * 1024 * 1024;
@@ -25,6 +26,7 @@ export function WorkspaceComposer() {
   const [repositories, setRepositories] = useState<GitHubRepository[]>([]);
   const [githubConnectUrl, setGithubConnectUrl] = useState("/api/github/connect?returnTo=%2Fworkspace");
   const [busy, setBusy] = useState(false);
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_AGENT_MODEL_ID);
   const [error, setError] = useState("");
   const contextInput = useRef<HTMLInputElement>(null);
 
@@ -90,7 +92,7 @@ export function WorkspaceComposer() {
       const notices: string[] = [];
       if (data.importSummary?.skipped) notices.push(`${data.importSummary.skipped} unsupported, secret, binary, or oversized repository files were safely skipped.`);
       if (failedUploads.length) notices.push(`${failedUploads.length} context file${failedUploads.length === 1 ? "" : "s"} could not be uploaded. Add them again, then run KODO.`);
-      const query = new URLSearchParams({ task: prompt });
+      const query = new URLSearchParams({ task: prompt, model: selectedModel });
       if (notices.length) query.set("notice", notices.join(" "));
       if (!failedUploads.length) query.set("autorun", "1");
       window.location.assign(`/project/${data.project.id}?${query.toString()}`);
@@ -113,7 +115,7 @@ export function WorkspaceComposer() {
         {!repositoryLoading && githubConnected ? <div className="composer-repo-list">{repositories.map(repository => <button type="button" className={selectedRepository?.name === repository.name ? "selected" : ""} key={repository.name} onClick={() => { setSelectedRepository(repository); setRepositoryOpen(false); }}><Github size={13}/><span><b>{repository.name}</b><small>{repository.branch} · {repository.private ? "Private" : "Public"} · {repository.language || "Code"}</small></span></button>)}{!repositories.length ? <p>No repositories are available to this GitHub App.</p> : null}</div> : null}
       </div> : null}
       <span/>
-      <button type="button" className="composer-model" aria-label="Selected AI model"><Sparkles size={13}/> GPT-5.6 Sol</button>
+      <label className="composer-model"><Sparkles size={13}/><select value={selectedModel} onChange={event => setSelectedModel(event.target.value as typeof selectedModel)} aria-label="Choose AI model">{AGENT_MODELS.map(model => <option value={model.id} key={model.id}>{model.label}</option>)}</select><ChevronDown size={11}/></label>
       <button className="composer-submit" disabled={!task.trim() || busy} aria-label="Create project and run KODO"><ArrowRight size={16}/></button>
     </div>
     <footer><span>@ context</span><span>/ commands</span><span>{busy ? selectedRepository ? "Importing repository…" : attachments.length ? "Uploading context…" : "Creating project…" : "⌘ ↵ run"}</span></footer>

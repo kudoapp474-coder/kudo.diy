@@ -8,6 +8,7 @@ import {
   RefreshCw, RotateCcw, Save, Settings2, Sparkles, Terminal, Trash2, X,
 } from "lucide-react";
 import { renderProjectDocument } from "../../lib/project-files";
+import { AGENT_MODELS, agentModelLabel, resolveAgentModelId, type AgentModelId } from "../../lib/agent-models";
 import { BrandLogo } from "./brand-logo";
 import { PublishingManager } from "./publishing-manager";
 
@@ -34,7 +35,7 @@ type ProjectData = {
   workspace: { plan: string; credits: number } | null;
 };
 type AgentStep = { type: string; label: string; status: string };
-type ChatMessage = { id: string; role: "user" | "agent"; text: string; done?: boolean; connectUrl?: string; credits?: number; steps?: AgentStep[] };
+type ChatMessage = { id: string; role: "user" | "agent"; text: string; done?: boolean; connectUrl?: string; credits?: number; steps?: AgentStep[]; model?: string };
 type CheckResult = { status?: string; phase?: string; command?: string; stdout?: string; stderr?: string; error?: string };
 
 function parseSteps(value: string) {
@@ -45,7 +46,7 @@ function messagesFromGenerations(generations: Generation[]): ChatMessage[] {
   if (!generations.length) return [{ id: "welcome", role: "agent", text: "Your real project files are ready. Describe the website and KODO will edit them, run checks and save a version." }];
   return generations.toReversed().flatMap(generation => [
     { id: `${generation.id}-user`, role: "user" as const, text: generation.prompt },
-    { id: `${generation.id}-agent`, role: "agent" as const, text: generation.result || generation.error || "The agent run did not return a summary.", done: generation.status === "complete", credits: generation.credits_used, steps: parseSteps(generation.steps_json) },
+    { id: `${generation.id}-agent`, role: "agent" as const, text: generation.result || generation.error || "The agent run did not return a summary.", done: generation.status === "complete", credits: generation.credits_used, steps: parseSteps(generation.steps_json), model: generation.model },
   ]);
 }
 
@@ -54,9 +55,10 @@ function languageForPath(path: string) {
   return ({ html: "html", css: "css", js: "javascript", mjs: "javascript", ts: "typescript", tsx: "typescript", json: "json", md: "markdown" } as Record<string, string>)[extension ?? ""] ?? "text";
 }
 
-export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false, initialNotice = "" }: { projectId: string; initialTask?: string; autoRun?: boolean; initialNotice?: string }) {
+export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false, initialNotice = "", initialModel = "" }: { projectId: string; initialTask?: string; autoRun?: boolean; initialNotice?: string; initialModel?: string }) {
   const [view, setView] = useState<"preview" | "code">("preview");
   const [prompt, setPrompt] = useState("");
+  const [selectedModel, setSelectedModel] = useState<AgentModelId>(() => resolveAgentModelId(initialModel));
   const [running, setRunning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [showFiles, setShowFiles] = useState(true);
@@ -144,9 +146,9 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
     setMessages(current => [...current, { id: `local-user-${Date.now()}`, role: "user", text: task }]);
     setPrompt(""); setRunning(true);
     try {
-      const response = await fetch("/api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, prompt: task }) });
-      const result = await response.json() as { result?: string; error?: string; connectUrl?: string; usage?: { creditsUsed?: number }; steps?: AgentStep[] };
-      setMessages(current => [...current, { id: `local-agent-${Date.now()}`, role: "agent", text: result.result ?? result.error ?? "The agent could not complete this run.", done: response.ok, connectUrl: result.connectUrl, credits: result.usage?.creditsUsed, steps: result.steps }]);
+      const response = await fetch("/api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, prompt: task, model: selectedModel }) });
+      const result = await response.json() as { result?: string; error?: string; connectUrl?: string; usage?: { creditsUsed?: number }; steps?: AgentStep[]; model?: string };
+      setMessages(current => [...current, { id: `local-agent-${Date.now()}`, role: "agent", text: result.result ?? result.error ?? "The agent could not complete this run.", done: response.ok, connectUrl: result.connectUrl, credits: result.usage?.creditsUsed, steps: result.steps, model: result.model ?? selectedModel }]);
       if (!response.ok) setError(result.error ?? "The agent could not complete this run.");
       setDrafts({}); await loadProject(); setPreviewNonce(value => value + 1);
       window.history.replaceState(null, "", `/project/${projectId}`);
@@ -345,10 +347,10 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
           <div className="agent-panel-head"><div><span className="online-dot" /><b>KODO Agent</b></div><button aria-label="Agent options"><MoreHorizontal size={17} /></button></div>
           <div className="conversation">
             <div className="agent-intro"><span><Sparkles size={16} /></span><h1>Build with KODO</h1><p>Ask for a complete website or a precise edit. Every real file and version stays in this project.</p></div>
-            {messages.map(message => <div className={`message ${message.role}`} key={message.id}><span className="message-role">{message.role === "user" ? "You" : <><Sparkles size={11} /> KODO</>}</span><p>{message.text}</p>{message.connectUrl ? <a className="message-connect" href={message.connectUrl}>Open integrations</a> : null}{message.done ? <div className="change-summary"><span><Check size={12} /> Agent run completed{message.credits ? ` · ${message.credits} credits` : ""}</span>{message.steps?.slice(-5).map((step, index) => <div key={`${step.label}-${index}`}><FileCode2 size={13} /><b>{step.label}</b><em>{step.status}</em></div>)}<button onClick={() => setView("code")}>Review real files</button></div> : null}</div>)}
-            {running ? <div className="message agent running-message"><span className="message-role"><Sparkles size={11} /> KODO</span><div className="thinking-line"><i /><span>Reading your project and making real changes</span></div><div className="thinking-steps"><span><Check size={11} /> Understanding request</span><span className="current"><i /> Editing project files</span><span>Running checks and saving version</span></div></div> : null}
+            {messages.map(message => <div className={`message ${message.role}`} key={message.id}><span className="message-role">{message.role === "user" ? "You" : <><Sparkles size={11} /> KODO{message.model ? ` · ${agentModelLabel(message.model)}` : ""}</>}</span><p>{message.text}</p>{message.connectUrl ? <a className="message-connect" href={message.connectUrl}>Open integrations</a> : null}{message.done ? <div className="change-summary"><span><Check size={12} /> Agent run completed{message.credits ? ` · ${message.credits} credits` : ""}</span>{message.steps?.slice(-5).map((step, index) => <div key={`${step.label}-${index}`}><FileCode2 size={13} /><b>{step.label}</b><em>{step.status}</em></div>)}<button onClick={() => setView("code")}>Review real files</button></div> : null}</div>)}
+            {running ? <div className="message agent running-message"><span className="message-role"><Sparkles size={11} /> KODO · {agentModelLabel(selectedModel)}</span><div className="thinking-line"><i /><span>Reading your project and making real changes</span></div><div className="thinking-steps"><span><Check size={11} /> Understanding request</span><span className="current"><i /> Editing project files</span><span>Running checks and saving version</span></div></div> : null}
           </div>
-          <div className="agent-composer"><textarea value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runAgent(); }} placeholder="Ask KODO to build, change, or fix…" aria-label="Message KODO" /><input ref={uploadInput} className="hidden-file-input" type="file" onChange={event => void uploadFile(event.target.files?.[0])} /><div><button aria-label="Add context" onClick={() => uploadInput.current?.click()}><Plus size={17} /></button><button className="attach-button" onClick={() => uploadInput.current?.click()}><Paperclip size={14} /> Attach</button><span className="composer-spacer" /><button className="model-button"><Sparkles size={13} /> GPT-5.6 Sol <ChevronDown size={11} /></button><button className="send-button" disabled={!prompt.trim() || running} onClick={() => void runAgent()}><ArrowUp size={16} /></button></div></div>
+          <div className="agent-composer"><textarea value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runAgent(); }} placeholder="Ask KODO to build, change, or fix…" aria-label="Message KODO" /><input ref={uploadInput} className="hidden-file-input" type="file" onChange={event => void uploadFile(event.target.files?.[0])} /><div><button aria-label="Add context" onClick={() => uploadInput.current?.click()}><Plus size={17} /></button><button className="attach-button" onClick={() => uploadInput.current?.click()}><Paperclip size={14} /> Attach</button><span className="composer-spacer" /><label className="model-select"><Sparkles size={13} /><select value={selectedModel} onChange={event => setSelectedModel(event.target.value as AgentModelId)} aria-label="Choose AI model">{AGENT_MODELS.map(model => <option value={model.id} key={model.id}>{model.label} — {model.description}</option>)}</select><ChevronDown size={11} /></label><button className="send-button" disabled={!prompt.trim() || running} onClick={() => void runAgent()}><ArrowUp size={16} /></button></div></div>
         </aside>
         <section className="work-panel">
           <header className="work-toolbar"><div className="view-switch"><button className={view === "preview" ? "active" : ""} onClick={() => setView("preview")}><Eye size={14} /> Preview</button><button className={view === "code" ? "active" : ""} onClick={() => setView("code")}><Code2 size={14} /> Code</button></div><div><button aria-label="Refresh preview" onClick={() => setPreviewNonce(value => value + 1)}><RefreshCw size={14} /></button><button onClick={() => setShowFiles(current => !current)}><Folder size={14} /> Files</button><button className={showVersions ? "active" : ""} onClick={() => setShowVersions(current => !current)}><History size={14} /> Versions</button><button onClick={() => void runCheck()} disabled={checking}><Terminal size={14} /> {checking ? "Checking…" : "Build"}</button><button aria-label="Preview settings"><Settings2 size={15} /></button></div></header>
