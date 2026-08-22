@@ -26,7 +26,7 @@ import { BrandLogo } from "./brand-logo";
 const navigation = [
   { href: "/workspace", label: "Home", icon: Home },
   { href: "/projects", label: "Projects", icon: LayoutGrid },
-  { href: "/agents", label: "Agents", icon: Bot, badge: "2" },
+  { href: "/agents", label: "Agents", icon: Bot },
   { href: "/automations", label: "Automations", icon: Workflow },
   { href: "/repositories", label: "Repositories", icon: FolderGit2 },
 ];
@@ -45,10 +45,13 @@ export async function ProductShell({ active, title, context, children, actions }
   const navigationItems = isKodoAdmin(auth.user.email)
     ? [...navigation, { href: "/admin/billing", label: "Admin", icon: ShieldCheck }]
     : navigation;
-  const [billing, recentProjects] = await Promise.all([
+  const [billing, recentProjects, runningAgents] = await Promise.all([
     auth.db.prepare("SELECT name, plan, credits FROM workspaces WHERE id = ?").bind(auth.workspaceId).first<WorkspaceBilling>(),
     allRecentProjects(auth),
+    auth.db.prepare("SELECT COUNT(*) AS count FROM generations WHERE workspace_id = ? AND status = 'running'").bind(auth.workspaceId).first<{ count: number | string }>(),
   ]);
+  const runningAgentCount = Number(runningAgents?.count ?? 0);
+  const badgeFor = (href: string) => href === "/agents" && runningAgentCount > 0 ? String(runningAgentCount) : undefined;
   const workspaceName = billing?.name ?? "My Workspace";
   const plan = billing?.plan === "pro" ? "Pro" : "Free";
   const credits = Number(billing?.credits ?? 500);
@@ -70,7 +73,7 @@ export async function ProductShell({ active, title, context, children, actions }
 
       <aside className="product-sidebar">
         <a className="new-project-link" href="/workspace#build"><Plus size={16} /> New project <kbd>⌘ N</kbd></a>
-        <nav>{navigationItems.map((item) => <a className={active === item.label.toLowerCase() ? "active" : ""} href={item.href} key={item.href}><item.icon size={16} /><span>{item.label}</span>{item.badge && <em>{item.badge}</em>}</a>)}</nav>
+        <nav>{navigationItems.map((item) => <a className={active === item.label.toLowerCase() ? "active" : ""} href={item.href} key={item.href}><item.icon size={16} /><span>{item.label}</span>{badgeFor(item.href) && <em>{badgeFor(item.href)}</em>}</a>)}</nav>
         <p className="sidebar-caption">RECENT PROJECTS</p>
         <div className="recent-project-links">{recentProjects.map((project, index) => <a href={`/project/${project.id}`} key={project.id}><span className={`project-glyph ${["violet","green","amber"][index % 3]}`}><Sparkles size={12} /></span><span><b>{project.name}</b><small>{project.status} · {new Date(project.updated_at).toLocaleDateString("en-IN")}</small></span></a>)}{!recentProjects.length ? <a href="/workspace#build"><span className="project-glyph violet"><Plus size={12} /></span><span><b>Build first project</b><small>Start from one prompt</small></span></a> : null}</div>
         <div className="sidebar-account"><div className={`credit-card ${active === "billing" ? "active" : ""} ${lowCredits ? "low" : ""}`}><span><Zap size={13} /> KODO {plan}</span><small>{credits.toLocaleString("en-IN")} credits remaining{lowCredits ? " · Low balance" : ""}</small><i><b style={{ width: `${creditPercent}%` }} /></i><a href="/billing">Manage plan</a></div><a className={active === "settings" ? "active" : ""} href="/settings"><Settings size={15} /> Settings</a></div>
