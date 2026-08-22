@@ -6,7 +6,8 @@
     "package.json",
     "script.js",
     "scripts/build.mjs",
-    "styles.css"
+    "styles.css",
+    "vercel.json"
   ],
-  "syncedAt": "2026-08-22T10:59:46.428Z"
+  "syncedAt": "2026-08-22T11:08:03.430Z"
 }
