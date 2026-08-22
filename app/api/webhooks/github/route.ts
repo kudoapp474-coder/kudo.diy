@@ -1,5 +1,5 @@
 import { all, ensureDatabase, now } from "../../../../lib/db";
-import { runKodoAgent } from "../../../../lib/agent-runner";
+import { runAutomation } from "../../../../lib/automation-runner";
 
 type WorkflowRunPayload = {
   action?: string;
@@ -86,14 +86,15 @@ export async function POST(request: Request) {
   `).bind(repository, triggerType));
 
   for (const automation of matches) {
-    await runKodoAgent({
+    await runAutomation({
       db,
+      automationId: automation.id,
       workspaceId: automation.workspace_id,
       userEmail: automation.owner_email,
       projectId: automation.project_id,
       prompt: automation.prompt,
+      trigger: "github",
     });
-    await db.prepare("UPDATE automations SET last_run_at = ? WHERE id = ?").bind(now(), automation.id).run();
   }
 
   return Response.json({ received: true, triggered: matches.length });

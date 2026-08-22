@@ -5,7 +5,9 @@ export async function GET() {
   const auth = await requireApiUser();
   if (!auth) return unauthorized();
   const automations = await all(auth.db.prepare(`
-    SELECT a.*, p.name AS project_name
+    SELECT a.*, p.name AS project_name,
+      (SELECT status FROM automation_runs r WHERE r.automation_id = a.id ORDER BY r.created_at DESC LIMIT 1) AS last_status,
+      (SELECT error FROM automation_runs r WHERE r.automation_id = a.id ORDER BY r.created_at DESC LIMIT 1) AS last_error
     FROM automations a
     LEFT JOIN projects p ON p.id = a.project_id
     WHERE a.workspace_id = ?
