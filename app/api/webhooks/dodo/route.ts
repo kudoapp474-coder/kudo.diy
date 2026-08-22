@@ -1,5 +1,6 @@
 import { ensureDatabase, id, now } from "../../../../lib/db";
 import { planForSubscriptionEvent } from "../../../../lib/billing-lifecycle";
+import { CREDIT_PACKS, isCreditPackId } from "../../../../lib/credit-packs";
 
 type DodoEvent = {
   business_id?: string;
@@ -101,6 +102,19 @@ export async function POST(request: Request) {
   }
 
   if (duplicate) return Response.json({ received: true, duplicate: true });
+
+  if (event.type === "payment.succeeded" && event.data?.metadata?.kind === "credit_topup") {
+    const packId = event.data.metadata.pack;
+    const pack = packId && isCreditPackId(packId) ? CREDIT_PACKS[packId] : null;
+    if (pack) {
+      await db.batch([
+        db.prepare("UPDATE workspaces SET credits = credits + ? WHERE id = ?").bind(pack.credits, workspaceId),
+        db.prepare("INSERT INTO usage_events (id, workspace_id, kind, units, metadata_json, created_at) VALUES (?, ?, 'credit_topup', ?, ?, ?)")
+          .bind(id("use"), workspaceId, pack.credits, lifecycleMetadata(event, webhookId), now()),
+      ]);
+    }
+    return Response.json({ received: true });
+  }
 
   if (event.type === "subscription.active") {
     await db.batch([
