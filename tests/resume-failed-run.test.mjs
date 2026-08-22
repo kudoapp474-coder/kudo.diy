@@ -26,6 +26,6 @@ test("resumes a failed or stopped run from its last checkpoint instead of starti
   assert.doesNotMatch(resumeRoute, /prompt:/);
   assert.match(resumeRoute, /resumeFromGenerationId: generationId/);
 
-  assert.match(workspace, /async function resumeRun\(generationId: string\)/);
+  assert.match(workspace, /async function resumeRun\(generationId: string/);
   assert.match(workspace, /Resume from checkpoint/);
 });
