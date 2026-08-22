@@ -4,7 +4,7 @@ import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowUp, Check, ChevronDown, CircleAlert, Code2, Download, ExternalLink, Eye, File, FileCode2,
-  Folder, GitBranch, Github, Globe, History, LoaderCircle, MoreHorizontal, Paperclip, Plus,
+  Folder, GitBranch, GitPullRequest, Github, Globe, History, LoaderCircle, MoreHorizontal, Paperclip, Plus,
   RefreshCw, RotateCcw, Save, Settings2, Sparkles, Square, Terminal, Trash2, X,
 } from "lucide-react";
 import { renderProjectDocument } from "../../lib/project-files";
@@ -26,7 +26,7 @@ type Version = {
   deployment_url: string | null;
 };
 type Deployment = { id: string; version_id: string; environment: string; status: string; url: string | null; created_at: string };
-type GitHubSync = { id: string; repository: string; branch: string; commit_sha: string | null; status: string; url: string | null; error: string | null; created_at: string };
+type GitHubSync = { id: string; repository: string; branch: string; commit_sha: string | null; status: string; url: string | null; error: string | null; pr_number: number | null; pr_url: string | null; pr_state: string | null; created_at: string };
 type GitHubRepository = { name: string; branch: string; private: boolean };
 type GitHubRepositoriesResponse = { connected: boolean; repositories: GitHubRepository[]; connectUrl?: string; error?: string };
 type ProjectData = {
@@ -86,6 +86,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
   const [publishing, setPublishing] = useState(false);
   const [githubOpen, setGithubOpen] = useState(false);
   const [githubBusy, setGithubBusy] = useState(false);
+  const [prBusy, setPrBusy] = useState(false);
   const [githubLoading, setGithubLoading] = useState(false);
   const [githubConnected, setGithubConnected] = useState<boolean | null>(null);
   const [githubRepositories, setGithubRepositories] = useState<GitHubRepository[]>([]);
@@ -371,6 +372,38 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
     }
   }
 
+  async function openPullRequest() {
+    if (prBusy) return;
+    setPrBusy(true); setError("");
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/github/pull-request`, { method: "POST" });
+      const result = await response.json() as { error?: string; pullRequest?: { url?: string } };
+      if (!response.ok) setError(result.error ?? "Could not open the pull request.");
+      else setNotice("Pull request opened.");
+      await loadProject();
+    } catch {
+      setError("KODO could not reach GitHub to open the pull request.");
+    } finally {
+      setPrBusy(false);
+    }
+  }
+
+  async function mergePullRequest() {
+    if (prBusy || !window.confirm("Merge this pull request on GitHub?")) return;
+    setPrBusy(true); setError("");
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/github/pull-request/merge`, { method: "POST" });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) setError(result.error ?? "Could not merge this pull request.");
+      else setNotice("Pull request merged.");
+      await loadProject();
+    } catch {
+      setError("KODO could not reach GitHub to merge the pull request.");
+    } finally {
+      setPrBusy(false);
+    }
+  }
+
   async function openGitHubDialog() {
     setGithubOpen(true);
     setGithubLoading(true);
@@ -498,6 +531,13 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
           {latestGitHubSync ? <div className={`latest-github-sync ${latestGitHubSync.status}`}>
             <span>{latestGitHubSync.status === "ready" ? <Check size={13} /> : latestGitHubSync.status === "failed" ? <CircleAlert size={13} /> : <LoaderCircle size={13} />} {latestGitHubSync.repository} · {latestGitHubSync.branch}</span>
             {latestGitHubSync.url ? <a href={latestGitHubSync.url} target="_blank" rel="noreferrer">Commit <ExternalLink size={11} /></a> : <em>{latestGitHubSync.status}</em>}
+          </div> : null}
+          {latestGitHubSync?.status === "ready" ? <div className={`latest-github-pr ${latestGitHubSync.pr_state ?? ""}`}>
+            {latestGitHubSync.pr_number ? <>
+              <span><GitPullRequest size={13} /> #{latestGitHubSync.pr_number} · {latestGitHubSync.pr_state ?? "open"}</span>
+              {latestGitHubSync.pr_url ? <a href={latestGitHubSync.pr_url} target="_blank" rel="noreferrer">View <ExternalLink size={11} /></a> : null}
+              {latestGitHubSync.pr_state === "open" ? <button disabled={prBusy} onClick={() => void mergePullRequest()}>{prBusy ? "Merging…" : "Merge pull request"}</button> : null}
+            </> : <button disabled={prBusy} onClick={() => void openPullRequest()}><GitPullRequest size={13} /> {prBusy ? "Opening…" : "Open pull request"}</button>}
           </div> : null}
           {githubLoading ? <div className="github-picker-state loading"><LoaderCircle size={15} /> Loading approved repositories…</div>
             : githubLoadError ? <div className="github-picker-state error"><CircleAlert size={15} /><span>{githubLoadError}</span><button onClick={() => void openGitHubDialog()}>Try again</button></div>
