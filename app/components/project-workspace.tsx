@@ -37,6 +37,15 @@ type ProjectData = {
 type AgentStep = { type: string; label: string; status: string };
 type ChatMessage = { id: string; role: "user" | "agent"; text: string; done?: boolean; connectUrl?: string; credits?: number; steps?: AgentStep[]; model?: string };
 type CheckResult = { status?: string; phase?: string; command?: string; stdout?: string; stderr?: string; error?: string };
+type PreviewKind = "desktop" | "mobile";
+
+const RUN_PHASES = [
+  { type: "read", label: "Inspecting project files" },
+  { type: "plan", label: "Planning the experience" },
+  { type: "edit", label: "Editing real project files" },
+  { type: "test", label: "Building and checking" },
+  { type: "version", label: "Saving a review version" },
+] as const;
 
 function parseSteps(value: string) {
   try { const parsed = JSON.parse(value) as AgentStep[]; return Array.isArray(parsed) ? parsed : []; } catch { return []; }
@@ -53,6 +62,12 @@ function messagesFromGenerations(generations: Generation[]): ChatMessage[] {
 function languageForPath(path: string) {
   const extension = path.split(".").pop()?.toLowerCase();
   return ({ html: "html", css: "css", js: "javascript", mjs: "javascript", ts: "typescript", tsx: "typescript", json: "json", md: "markdown" } as Record<string, string>)[extension ?? ""] ?? "text";
+}
+
+function inferPreviewKind(data: ProjectData | null): PreviewKind {
+  const recentPrompts = data?.generations.slice(0, 5).map(generation => generation.prompt).join(" ") ?? "";
+  const projectText = [data?.project.name, data?.project.description, recentPrompts].filter(Boolean).join(" ");
+  return /\b(app|mobile|android|ios|iphone|game|gaming)\b/i.test(projectText) ? "mobile" : "desktop";
 }
 
 export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false, initialNotice = "", initialModel = "" }: { projectId: string; initialTask?: string; autoRun?: boolean; initialNotice?: string; initialModel?: string }) {
@@ -85,6 +100,9 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
   const [error, setError] = useState("");
   const [notice, setNotice] = useState(initialNotice);
   const [previewNonce, setPreviewNonce] = useState(0);
+  const [previewOverride, setPreviewOverride] = useState<PreviewKind | null>(null);
+  const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
+  const [runSeconds, setRunSeconds] = useState(0);
   const uploadInput = useRef<HTMLInputElement>(null);
   const autoRunStarted = useRef(false);
   const startInitialRun = useEffectEvent((task: string) => { void runAgent(task); });
@@ -131,12 +149,38 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
     }
   }, [loading, data, autoRun, initialTask]);
 
+  useEffect(() => {
+    if (!running) return;
+    let active = true;
+    const startedAt = Date.now();
+    const refreshActivity = async () => {
+      try {
+        const payload = await fetchProject();
+        if (!active) return;
+        setData(payload);
+        const activeGeneration = payload.generations.find(generation => generation.status === "running");
+        if (activeGeneration) setLiveSteps(parseSteps(activeGeneration.steps_json));
+      } catch {
+        // The main agent request owns error reporting. Activity polling is best effort.
+      }
+    };
+    const timer = window.setInterval(() => {
+      setRunSeconds(Math.max(1, Math.floor((Date.now() - startedAt) / 1000)));
+      void refreshActivity();
+    }, 2_000);
+    void refreshActivity();
+    return () => { active = false; window.clearInterval(timer); };
+  }, [running, projectId]);
+
   const previewDocument = useMemo(() => renderProjectDocument(data?.files ?? [], data?.project.name), [data?.files, data?.project.name]);
   const selectedFile = data?.files.find(file => file.path === selectedPath) ?? null;
   const editorValue = drafts[selectedPath] ?? selectedFile?.content ?? "";
   const dirty = Boolean(selectedFile && editorValue !== selectedFile.content);
   const latestGitHubSync = data?.githubSyncs?.[0] ?? null;
   const latestUrl = data?.deployments.find(deployment => deployment.status === "ready" && deployment.url)?.url || data?.project.production_url || data?.project.preview_url;
+  const automaticPreviewKind = inferPreviewKind(data);
+  const previewKind = previewOverride ?? automaticPreviewKind;
+  const currentRunPhase = RUN_PHASES.findIndex(phase => !liveSteps.some(step => step.type === phase.type));
 
   async function runAgent(override?: string) {
     const task = (override ?? prompt).trim();
@@ -144,10 +188,11 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
     if (Number(data?.workspace?.credits ?? 20) < 20) { setError("At least 20 credits are required for an agent run. Recharge from Billing."); return; }
     setError(""); setNotice("");
     setMessages(current => [...current, { id: `local-user-${Date.now()}`, role: "user", text: task }]);
-    setPrompt(""); setRunning(true);
+    setPrompt(""); setLiveSteps([]); setRunSeconds(0); setRunning(true);
     try {
       const response = await fetch("/api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, prompt: task, model: selectedModel }) });
       const result = await response.json() as { result?: string; error?: string; connectUrl?: string; usage?: { creditsUsed?: number }; steps?: AgentStep[]; model?: string };
+      setLiveSteps(result.steps ?? []);
       setMessages(current => [...current, { id: `local-agent-${Date.now()}`, role: "agent", text: result.result ?? result.error ?? "The agent could not complete this run.", done: response.ok, connectUrl: result.connectUrl, credits: result.usage?.creditsUsed, steps: result.steps, model: result.model ?? selectedModel }]);
       if (!response.ok) setError(result.error ?? "The agent could not complete this run.");
       setDrafts({}); await loadProject(); setPreviewNonce(value => value + 1);
@@ -348,13 +393,31 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
           <div className="conversation">
             <div className="agent-intro"><span><Sparkles size={16} /></span><h1>Build with KODO</h1><p>Ask for a complete website or a precise edit. Every real file and version stays in this project.</p></div>
             {messages.map(message => <div className={`message ${message.role}`} key={message.id}><span className="message-role">{message.role === "user" ? "You" : <><Sparkles size={11} /> KODO{message.model ? ` · ${agentModelLabel(message.model)}` : ""}</>}</span><p>{message.text}</p>{message.connectUrl ? <a className="message-connect" href={message.connectUrl}>Open integrations</a> : null}{message.done ? (() => { const madeEdits = message.steps?.some(step => step.type === "edit"); return <div className="change-summary">{madeEdits ? <span><Check size={12} /> Agent run completed{message.credits ? ` · ${message.credits} credits` : ""}</span> : <span><CircleAlert size={12} /> No file changes were made{message.credits ? ` · ${message.credits} credits` : ""}</span>}{message.steps?.slice(-5).map((step, index) => <div key={`${step.label}-${index}`}><FileCode2 size={13} /><b>{step.label}</b><em>{step.status}</em></div>)}<button onClick={() => setView("code")}>Review real files</button></div>; })() : null}</div>)}
-            {running ? <div className="message agent running-message"><span className="message-role"><Sparkles size={11} /> KODO · {agentModelLabel(selectedModel)}</span><div className="thinking-line"><i /><span>Reading your project and making real changes</span></div><div className="thinking-steps"><span><Check size={11} /> Understanding request</span><span className="current"><i /> Editing project files</span><span>Running checks and saving version</span></div></div> : null}
+            {running ? <div className="message agent running-message">
+              <span className="message-role"><Sparkles size={11} /> KODO · {agentModelLabel(selectedModel)}</span>
+              <div className="thinking-line"><i /><span>{currentRunPhase >= 0 ? RUN_PHASES[currentRunPhase]?.label : "Finishing the agent response"}</span><time>{runSeconds}s</time></div>
+              <p className="thinking-note">Live activity · The preview refreshes as soon as KODO saves real files.</p>
+              <div className="thinking-steps">
+                <span className="complete"><Check size={11} /> Understanding your request</span>
+                {RUN_PHASES.map((phase, index) => {
+                  const matchingStep = liveSteps.find(step => step.type === phase.type);
+                  const complete = Boolean(matchingStep);
+                  const current = !complete && index === currentRunPhase;
+                  return <span className={complete ? "complete" : current ? "current" : "upcoming"} key={phase.type}>{complete ? <Check size={11} /> : <i />}{matchingStep?.label ?? phase.label}<em>{complete ? matchingStep?.status : current ? "working" : "queued"}</em></span>;
+                })}
+              </div>
+            </div> : null}
           </div>
           <div className="agent-composer"><textarea value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runAgent(); }} placeholder="Ask KODO to build, change, or fix…" aria-label="Message KODO" /><input ref={uploadInput} className="hidden-file-input" type="file" onChange={event => void uploadFile(event.target.files?.[0])} /><div><button aria-label="Add context" onClick={() => uploadInput.current?.click()}><Plus size={17} /></button><button className="attach-button" onClick={() => uploadInput.current?.click()}><Paperclip size={14} /> Attach</button><span className="composer-spacer" /><label className="model-select"><Sparkles size={13} /><select value={selectedModel} onChange={event => setSelectedModel(event.target.value as AgentModelId)} aria-label="Choose AI model">{AGENT_MODELS.map(model => <option value={model.id} key={model.id}>{model.label} — {model.description}</option>)}</select><ChevronDown size={11} /></label><button className="send-button" disabled={!prompt.trim() || running} onClick={() => void runAgent()}><ArrowUp size={16} /></button></div></div>
         </aside>
         <section className="work-panel">
-          <header className="work-toolbar"><div className="view-switch"><button className={view === "preview" ? "active" : ""} onClick={() => setView("preview")}><Eye size={14} /> Preview</button><button className={view === "code" ? "active" : ""} onClick={() => setView("code")}><Code2 size={14} /> Code</button></div><div><button aria-label="Refresh preview" onClick={() => setPreviewNonce(value => value + 1)}><RefreshCw size={14} /></button><button onClick={() => setShowFiles(current => !current)}><Folder size={14} /> Files</button><button className={showVersions ? "active" : ""} onClick={() => setShowVersions(current => !current)}><History size={14} /> Versions</button><button onClick={() => void runCheck()} disabled={checking}><Terminal size={14} /> {checking ? "Checking…" : "Build"}</button><button aria-label="Preview settings"><Settings2 size={15} /></button></div></header>
-          {view === "preview" ? <div className="live-preview"><div className="preview-browser"><div><button>←</button><button>→</button><button onClick={() => setPreviewNonce(value => value + 1)}>↻</button></div>{latestUrl ? <a href={latestUrl} target="_blank" rel="noreferrer">{latestUrl}<ExternalLink size={11} /></a> : <span>Secure instant preview</span>}<button>•••</button></div><iframe key={previewNonce} title={`${data?.project.name ?? "Project"} preview`} srcDoc={previewDocument} sandbox="allow-scripts allow-forms allow-modals allow-popups" /></div> : <div className="code-workspace">{showFiles ? <aside className="file-tree"><header><p>EXPLORER</p><button onClick={() => void createFile()} aria-label="New file"><Plus size={13} /></button></header>{data?.files.map(file => <button className={file.path === selectedPath ? "active" : ""} onClick={() => setSelectedPath(file.path)} key={file.id}>{file.path.includes("/") ? <Folder size={13} /> : file.language === "asset" ? <File size={13} /> : <FileCode2 size={13} />}<span>{file.path}</span></button>)}</aside> : null}<section className="editor"><div className="editor-tabs"><span><FileCode2 size={12} /> {selectedPath || "No file"}</span><div><button onClick={downloadFile} aria-label="Download file"><Download size={13} /></button><button onClick={() => void deleteFile()} aria-label="Delete file"><Trash2 size={13} /></button><button className="editor-save" disabled={!dirty || saving} onClick={() => void saveFile()}><Save size={13} /> {saving ? "Saving…" : "Save"}</button></div></div><textarea className="code-editor" value={editorValue} onChange={event => setDrafts(current => ({ ...current, [selectedPath]: event.target.value }))} spellCheck={false} aria-label={`Edit ${selectedPath}`} /><div className="editor-status"><span>{selectedFile?.language ?? "text"}</span><span>{editorValue.length.toLocaleString("en-IN")} characters · UTF-8</span></div></section></div>}
+          <header className="work-toolbar"><div className="view-switch"><button className={view === "preview" ? "active" : ""} onClick={() => setView("preview")}><Eye size={14} /> Preview</button><button className={view === "code" ? "active" : ""} onClick={() => setView("code")}><Code2 size={14} /> Code</button></div><div><button aria-label="Refresh preview" onClick={() => setPreviewNonce(value => value + 1)}><RefreshCw size={14} /></button><button onClick={() => setShowFiles(current => !current)}><Folder size={14} /> Files</button><button className={showVersions ? "active" : ""} onClick={() => setShowVersions(current => !current)}><History size={14} /> Versions</button><button onClick={() => void runCheck()} disabled={checking}><Terminal size={14} /> {checking ? "Checking…" : "Build"}</button><button aria-label={`Preview mode: ${previewKind}`} title={`Showing ${previewKind} preview. Click to switch.`} onClick={() => setPreviewOverride(previewKind === "mobile" ? "desktop" : "mobile")}><Settings2 size={15} /></button></div></header>
+          {view === "preview" ? <div className={`live-preview ${previewKind}-preview`}>
+            <div className="preview-browser"><div><button>←</button><button>→</button><button onClick={() => setPreviewNonce(value => value + 1)}>↻</button></div>{latestUrl ? <a href={latestUrl} target="_blank" rel="noreferrer">{latestUrl}<ExternalLink size={11} /></a> : <span>Secure instant preview</span>}<small>{previewOverride ? "Manual" : "Auto"} · {previewKind === "mobile" ? "Phone" : "Desktop"}</small></div>
+            <div className="preview-stage">
+              {previewKind === "mobile" ? <div className="phone-preview-shell"><div className="phone-speaker" /><iframe key={previewNonce} title={`${data?.project.name ?? "Project"} mobile preview`} srcDoc={previewDocument} sandbox="allow-scripts allow-forms allow-modals allow-popups" /><div className="phone-home-indicator" /></div> : <iframe key={previewNonce} title={`${data?.project.name ?? "Project"} preview`} srcDoc={previewDocument} sandbox="allow-scripts allow-forms allow-modals allow-popups" />}
+            </div>
+          </div> : <div className="code-workspace">{showFiles ? <aside className="file-tree"><header><p>EXPLORER</p><button onClick={() => void createFile()} aria-label="New file"><Plus size={13} /></button></header>{data?.files.map(file => <button className={file.path === selectedPath ? "active" : ""} onClick={() => setSelectedPath(file.path)} key={file.id}>{file.path.includes("/") ? <Folder size={13} /> : file.language === "asset" ? <File size={13} /> : <FileCode2 size={13} />}<span>{file.path}</span></button>)}</aside> : null}<section className="editor"><div className="editor-tabs"><span><FileCode2 size={12} /> {selectedPath || "No file"}</span><div><button onClick={downloadFile} aria-label="Download file"><Download size={13} /></button><button onClick={() => void deleteFile()} aria-label="Delete file"><Trash2 size={13} /></button><button className="editor-save" disabled={!dirty || saving} onClick={() => void saveFile()}><Save size={13} /> {saving ? "Saving…" : "Save"}</button></div></div><textarea className="code-editor" value={editorValue} onChange={event => setDrafts(current => ({ ...current, [selectedPath]: event.target.value }))} spellCheck={false} aria-label={`Edit ${selectedPath}`} /><div className="editor-status"><span>{selectedFile?.language ?? "text"}</span><span>{editorValue.length.toLocaleString("en-IN")} characters · UTF-8</span></div></section></div>}
           {showVersions ? <aside className="version-panel"><header><div><span>PROJECT HISTORY</span><h2>Versions & rollback</h2></div><button onClick={() => setShowVersions(false)} aria-label="Close version history"><X size={15} /></button></header><div className="version-safety"><Check size={13} /><span><b>Safe restores</b><small>KODO checkpoints current files before every restore or production rollback.</small></span></div><button className="checkpoint-button" disabled={Boolean(versionBusy)} onClick={() => void createCheckpoint()}>{versionBusy === "checkpoint" ? <LoaderCircle size={13} /> : <Plus size={13} />} {versionBusy === "checkpoint" ? "Creating…" : "Create checkpoint"}</button><div>{data?.versions.map(version => {
             const knownGood = version.deployment_environment === "production" && version.deployment_status === "ready";
             const busy = versionBusy === version.id;

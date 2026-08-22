@@ -128,12 +128,18 @@ export async function runKodoAgent(params: {
       .bind(generationId, workspaceId, projectId, userEmail, selectedModel, prompt.slice(0, 12000), timestamp, timestamp).run();
     generationInserted = true;
 
+    const recordStep = async (step: AgentStep) => {
+      steps.push(step);
+      await db.prepare("UPDATE generations SET steps_json = ?, updated_at = ? WHERE id = ?")
+        .bind(JSON.stringify(steps), now(), generationId).run();
+    };
+
     const creditBudgetStop = agentCreditStopCondition(selectedModel, runCreditBudget);
     const agent = new ToolLoopAgent({
       model: selectedModel,
       instructions: `You are KODO, a production website coding agent. You must implement the user's request in the project files, not merely describe a design or print code in chat.
 The build lifecycle is enforced: inspect the project, save a concise plan, apply all necessary file changes, run the production check, repair failed checks when possible, create a version, then summarize the result.
-The instant preview runtime is a dependency-free static web project. For a new or redesigned experience, implement the complete visual result in index.html, styles.css and script.js. Keep package.json and scripts/build.mjs working. Use compact production code so the complete implementation fits in the file-application step. You may use remote HTTPS image, video and font URLs, but do not add npm dependencies or frameworks unless the user explicitly asks and the static preview still works.
+The instant preview runtime is a dependency-free static web project. For a new or redesigned experience, implement the complete visual result in index.html, styles.css and script.js. Keep package.json and scripts/build.mjs working. Use compact production code so the complete implementation fits in the file-application step. You may use remote HTTPS image, video and font URLs, but do not add npm dependencies or frameworks unless the user explicitly asks and the static preview still works. When the request is for an app, mobile product or game, design mobile-first for a 390x844 phone viewport. Style every link, button, navigation item and metric; do not leave browser-default blue links, collapsed labels, horizontal overflow or overlapping content.
 When applyProjectFiles is requested, send the complete contents of every file required to implement the plan in that single tool call. For full website/app builds, normally include index.html, styles.css and script.js together. Preserve unrelated existing files. Never put prose, markdown fences, or explanations inside file contents.
 Every website must be responsive, accessible, visually polished, and use real copy instead of placeholders. Implement interactions in script.js. Never claim a check passed if the sandbox reports skipped or failed. Keep the final response concise and list the files changed.`,
       stopWhen: [
@@ -175,7 +181,7 @@ Every website must be responsive, accessible, visually polished, and use real co
           description: "Read the current project file paths and their text content.",
           inputSchema: z.object({}),
           execute: async () => {
-            steps.push({ type: "read", label: "Inspected project files", status: "complete" });
+            await recordStep({ type: "read", label: "Inspected project files", status: "complete" });
             const files = await all<{ path: string; content: string }>(db.prepare("SELECT path, content FROM project_files WHERE project_id = ? ORDER BY path LIMIT 80").bind(projectId));
             return boundedProjectContext(files);
           },
@@ -184,7 +190,7 @@ Every website must be responsive, accessible, visually polished, and use real co
           description: "Save the implementation plan before editing.",
           inputSchema: z.object({ tasks: z.array(z.string()).min(1).max(12) }),
           execute: async ({ tasks }) => {
-            steps.push({ type: "plan", label: `${tasks.length} implementation tasks planned`, status: "complete" });
+            await recordStep({ type: "plan", label: `${tasks.length} implementation tasks planned`, status: "complete" });
             return { saved: true, tasks };
           },
         }),
@@ -208,7 +214,7 @@ Every website must be responsive, accessible, visually polished, and use real co
             await db.batch(normalizedFiles.map(file => db.prepare("INSERT INTO project_files (id, project_id, path, content, language, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(project_id, path) DO UPDATE SET content = excluded.content, language = excluded.language, updated_at = excluded.updated_at")
               .bind(id("file"), projectId, file.normalizedPath as string, file.content, file.language, updatedAt)));
             for (const file of normalizedFiles) {
-              steps.push({ type: "edit", label: `Updated ${file.normalizedPath}`, status: "complete" });
+              await recordStep({ type: "edit", label: `Updated ${file.normalizedPath}`, status: "complete" });
             }
             return {
               saved: true,
@@ -221,12 +227,12 @@ Every website must be responsive, accessible, visually polished, and use real co
           inputSchema: z.object({ command: z.string().max(300).default("npm run build") }),
           execute: async ({ command }) => {
             if (!nativeSandboxConfigured()) {
-              steps.push({ type: "test", label: "Checks need sandbox connection", status: "skipped" });
+              await recordStep({ type: "test", label: "Checks need sandbox connection", status: "skipped" });
               return { status: "skipped", reason: "Vercel OIDC is unavailable. Do not claim tests passed." };
             }
             const files = await all<{ path: string; content: string }>(db.prepare("SELECT path, content FROM project_files WHERE project_id = ?").bind(projectId));
             const result = await runProjectChecks(files, command);
-            steps.push({ type: "test", label: result.status === "passed" ? "Build and tests passed" : "Checks failed", status: result.status === "passed" ? "complete" : "failed" });
+            await recordStep({ type: "test", label: result.status === "passed" ? "Build and tests passed" : "Checks failed", status: result.status === "passed" ? "complete" : "failed" });
             return result;
           },
         }),
@@ -238,7 +244,7 @@ Every website must be responsive, accessible, visually polished, and use real co
             const versionId = id("ver");
             await db.prepare("INSERT INTO versions (id, project_id, generation_id, label, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
               .bind(versionId, projectId, generationId, label, JSON.stringify(files), now()).run();
-            steps.push({ type: "version", label: "Created review checkpoint", status: "complete" });
+            await recordStep({ type: "version", label: "Created review checkpoint", status: "complete" });
             return { versionId, files: files.length };
           },
         }),
