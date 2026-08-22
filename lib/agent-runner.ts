@@ -16,6 +16,7 @@ import {
   boundedProjectContext,
   workspaceAgentSpendWindow,
 } from "./agent-spend";
+import { loadWorkspacePermissions } from "./permissions";
 import { nativeSandboxConfigured, runProjectChecks } from "./vercel-sandbox";
 
 const CONFIGURED_DEFAULT_MODEL = isAgentModelId(process.env.KODO_MODEL) ? process.env.KODO_MODEL : DEFAULT_AGENT_MODEL_ID;
@@ -67,6 +68,18 @@ export async function runKodoAgent(params: {
   const existingProject = await db.prepare("SELECT id, name, description FROM projects WHERE id = ? AND workspace_id = ?")
     .bind(projectId, workspaceId).first<{ id: string; name: string; description: string }>();
   if (!existingProject) return { httpStatus: 404, body: { error: "Project not found." } };
+
+  const permissions = await loadWorkspacePermissions(db, workspaceId);
+  if (!permissions.createCommits) {
+    return {
+      httpStatus: 403,
+      body: {
+        error: "This workspace has disabled KODO from making file changes without asking. Enable \"Create branches and commits\" in Settings → Agent permissions to run this agent.",
+        code: "PERMISSION_DENIED",
+        permission: "createCommits",
+      },
+    };
+  }
 
   const existingFiles = await db.prepare("SELECT COUNT(*) AS count FROM project_files WHERE project_id = ?")
     .bind(projectId).first<{ count: number | string }>();
@@ -168,10 +181,10 @@ Every website must be responsive, accessible, visually polished, and use real co
         if (editIndex < 0) {
           return { maxOutputTokens, toolChoice: { type: "tool", toolName: "applyProjectFiles" } };
         }
-        if (testIndex < editIndex) {
+        if (permissions.runTests && testIndex < editIndex) {
           return { maxOutputTokens, toolChoice: { type: "tool", toolName: "runChecks" } };
         }
-        if (steps[testIndex]?.status === "failed" && failedChecks < 2) {
+        if (permissions.runTests && steps[testIndex]?.status === "failed" && failedChecks < 2) {
           return { maxOutputTokens, toolChoice: { type: "tool", toolName: "applyProjectFiles" } };
         }
         return { maxOutputTokens, toolChoice: { type: "tool", toolName: "createVersion" } };
@@ -226,6 +239,10 @@ Every website must be responsive, accessible, visually polished, and use real co
           description: "Run project build and tests in the connected secure sandbox.",
           inputSchema: z.object({ command: z.string().max(300).default("npm run build") }),
           execute: async ({ command }) => {
+            if (!permissions.runTests) {
+              await recordStep({ type: "test", label: "Checks disabled by workspace agent permissions", status: "skipped" });
+              return { status: "skipped", reason: "This workspace has disabled KODO from running tests and builds. Do not claim tests passed." };
+            }
             if (!nativeSandboxConfigured()) {
               await recordStep({ type: "test", label: "Checks need sandbox connection", status: "skipped" });
               return { status: "skipped", reason: "Vercel OIDC is unavailable. Do not claim tests passed." };
