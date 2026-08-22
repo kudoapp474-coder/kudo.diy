@@ -1,11 +1,7 @@
 import {
-  Check,
   FileCode2,
-  FolderGit2,
-  GitBranch,
   MoreHorizontal,
   Plus,
-  RefreshCw,
   ShieldCheck,
   Users,
   Workflow,
@@ -14,6 +10,7 @@ import {
 import { ProductShell } from "./product-shell";
 import { BillingPlanCard } from "./billing-plan-card";
 import { BillingUsage } from "./billing-usage";
+import { RepositoriesManager } from "./repositories-manager";
 
 const automations = [
   { title: "Fix CI failures on main", desc: "Investigate failures, repair the cause, and open a pull request.", trigger: "GitHub Actions fails", ran: "3h ago", icon: Zap },
@@ -25,15 +22,8 @@ export function AutomationsView() {
   return <ProductShell active="automations" title="Automations" context="ALWAYS-ON WORK" actions={<button className="header-primary"><Plus size={15} /> New automation</button>}><div className="automation-cards">{automations.map((automation) => <article key={automation.title}><header><span><automation.icon size={17} /></span><button><MoreHorizontal size={16} /></button></header><h2>{automation.title}</h2><p>{automation.desc}</p><div className="automation-trigger"><Workflow size={13} /><span><small>TRIGGER</small>{automation.trigger}</span></div><footer><span><i /> Active</span><time>Ran {automation.ran}</time></footer></article>)}<button className="create-automation"><Plus size={21} /><b>Build an automation</b><span>Describe the workflow in plain language</span></button></div></ProductShell>;
 }
 
-const repos = [
-  { name: "kodo/web", language: "TypeScript", branch: "main", updated: "2 min ago", status: "Ready", color: "#5b8def" },
-  { name: "kodo/api", language: "TypeScript", branch: "main", updated: "18 min ago", status: "Ready", color: "#5b8def" },
-  { name: "kodo/dashboard", language: "React", branch: "production", updated: "Yesterday", status: "Indexing", color: "#4da67c" },
-  { name: "kodo/docs", language: "MDX", branch: "main", updated: "2 days ago", status: "Ready", color: "#b78b52" },
-];
-
 export function RepositoriesView() {
-  return <ProductShell active="repositories" title="Repositories" context="PROJECT CONTEXT" actions={<button className="header-primary"><Plus size={15} /> Connect repository</button>}><div className="repo-summary"><article><FolderGit2 size={17} /><span><b>4 repositories</b><small>Connected to this workspace</small></span></article><article><RefreshCw size={17} /><span><b>Indexing automatically</b><small>Last sync 2 minutes ago</small></span></article><article><ShieldCheck size={17} /><span><b>Private by default</b><small>Scoped GitHub permissions</small></span></article></div><div className="repo-list"><div className="repo-list-head"><span>Repository</span><span>Language</span><span>Default branch</span><span>Last indexed</span><span>Status</span></div>{repos.map((repo) => <button key={repo.name}><span className="repo-name"><i><FolderGit2 size={16} /></i><b>{repo.name}</b></span><span><i className="language-dot" style={{background:repo.color}} />{repo.language}</span><span><GitBranch size={12} />{repo.branch}</span><span>{repo.updated}</span><span className={repo.status.toLowerCase()}>{repo.status === "Ready" && <Check size={12} />}{repo.status === "Indexing" && <i />}{repo.status}</span><MoreHorizontal size={15} /></button>)}</div></ProductShell>;
+  return <ProductShell active="repositories" title="Repositories" context="PROJECT CONTEXT" actions={<a className="header-primary" href="/api/github/connect?returnTo=/repositories"><Plus size={15}/> Connect GitHub</a>}><RepositoriesManager/></ProductShell>;
 }
 
 export function SettingsView() {
