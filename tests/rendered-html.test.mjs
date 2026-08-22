@@ -54,7 +54,7 @@ test("wires the real prompt-to-publish builder flow", async () => {
   assert.match(builder, /srcDoc=\{previewDocument\}/);
   assert.match(builder, /\/files`/);
   assert.match(builder, /\/publish`/);
-  assert.match(agentApi, /openai\/gpt-5\.6-sol/);
+  assert.match(agentApi, /isAgentModelId/);
   assert.match(agentApi, /runProjectChecks/);
   assert.match(publishApi, /provider: realDeployment \? "Vercel"/);
   assert.match(publishApi, /status: deploymentStatus/);
@@ -181,4 +181,27 @@ test("imports a connected GitHub repository before the first agent run", async (
   assert.match(importer, /name === "\.env"/);
   assert.match(importer, /content\.includes\("\\0"\)/);
   assert.doesNotMatch(composer, /GITHUB_APP_PRIVATE_KEY|Authorization:|Bearer /);
+});
+
+
+test("wires a verified model selector through generation history and usage", async () => {
+  const [models, workspace, page, builder, agentApi] = await Promise.all([
+    readFile(new URL("../lib/agent-models.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/workspace-composer.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/project/[projectId]/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/project-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/agent/route.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(models, /openai\/gpt-5\.4/);
+  assert.match(models, /openai\/gpt-5\.3-codex/);
+  assert.match(models, /openai\/gpt-5\.4-mini/);
+  assert.match(workspace, /task: prompt, model: selectedModel/);
+  assert.match(page, /initialModel=/);
+  assert.match(builder, /body: JSON\.stringify\(\{ projectId, prompt: task, model: selectedModel \}\)/);
+  assert.match(builder, /generation\.model/);
+  assert.match(agentApi, /code: "INVALID_MODEL"/);
+  assert.match(agentApi, /model: selectedModel/);
+  assert.match(agentApi, /JSON\.stringify\(\{ model: selectedModel/);
+  assert.doesNotMatch(workspace + builder + agentApi, /GPT-5\.6 Sol|openai\/gpt-5\.6-sol/);
 });
