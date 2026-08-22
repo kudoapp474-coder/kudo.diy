@@ -1,25 +1,15 @@
 import {
-  FileCode2,
-  MoreHorizontal,
   Plus,
-  ShieldCheck,
   Users,
-  Workflow,
-  Zap,
 } from "lucide-react";
 import { ProductShell } from "./product-shell";
 import { BillingPlanCard } from "./billing-plan-card";
 import { BillingUsage } from "./billing-usage";
 import { RepositoriesManager } from "./repositories-manager";
-
-const automations = [
-  { title: "Fix CI failures on main", desc: "Investigate failures, repair the cause, and open a pull request.", trigger: "GitHub Actions fails", ran: "3h ago", icon: Zap },
-  { title: "Weekly security review", desc: "Review dependencies and high-risk code changes every Friday.", trigger: "Fridays at 5:00 PM", ran: "4d ago", icon: ShieldCheck },
-  { title: "Keep documentation current", desc: "Update API docs whenever public routes change.", trigger: "Pull request merged", ran: "Yesterday", icon: FileCode2 },
-];
+import { AutomationsManager } from "./automations-manager";
 
 export function AutomationsView() {
-  return <ProductShell active="automations" title="Automations" context="ALWAYS-ON WORK" actions={<button className="header-primary"><Plus size={15} /> New automation</button>}><div className="automation-cards">{automations.map((automation) => <article key={automation.title}><header><span><automation.icon size={17} /></span><button><MoreHorizontal size={16} /></button></header><h2>{automation.title}</h2><p>{automation.desc}</p><div className="automation-trigger"><Workflow size={13} /><span><small>TRIGGER</small>{automation.trigger}</span></div><footer><span><i /> Active</span><time>Ran {automation.ran}</time></footer></article>)}<button className="create-automation"><Plus size={21} /><b>Build an automation</b><span>Describe the workflow in plain language</span></button></div></ProductShell>;
+  return <ProductShell active="automations" title="Automations" context="ALWAYS-ON WORK"><AutomationsManager /></ProductShell>;
 }
 
 export function RepositoriesView() {
