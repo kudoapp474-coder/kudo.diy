@@ -103,6 +103,10 @@ export async function ensureDatabase() {
   ]);
   try { await db.prepare("ALTER TABLE automations ADD COLUMN project_id TEXT").run(); } catch { /* already migrated */ }
   try { await db.prepare("ALTER TABLE generations ADD COLUMN cancel_requested_at TEXT").run(); } catch { /* already migrated */ }
+  try { await db.prepare("ALTER TABLE generations ADD COLUMN resumed_from TEXT").run(); } catch { /* already migrated */ }
+  try { await db.prepare("ALTER TABLE github_syncs ADD COLUMN pr_number INTEGER").run(); } catch { /* already migrated */ }
+  try { await db.prepare("ALTER TABLE github_syncs ADD COLUMN pr_url TEXT").run(); } catch { /* already migrated */ }
+  try { await db.prepare("ALTER TABLE github_syncs ADD COLUMN pr_state TEXT").run(); } catch { /* already migrated */ }
   return db;
 }
 

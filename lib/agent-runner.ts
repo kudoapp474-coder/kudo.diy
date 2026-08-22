@@ -53,13 +53,38 @@ export async function runKodoAgent(params: {
   workspaceId: string;
   userEmail: string;
   projectId: string;
-  prompt: string;
+  prompt?: string;
   model?: string;
+  resumeFromGenerationId?: string;
 }): Promise<AgentRunResult> {
-  const { db, workspaceId, userEmail, projectId, prompt } = params;
-  const requestedModel = params.model?.trim();
-  if (requestedModel && !isAgentModelId(requestedModel)) return { httpStatus: 400, body: { error: "This AI model is not available.", code: "INVALID_MODEL" } };
-  const selectedModel: AgentModelId = requestedModel && isAgentModelId(requestedModel) ? requestedModel : CONFIGURED_DEFAULT_MODEL;
+  const { db, workspaceId, userEmail, projectId, resumeFromGenerationId } = params;
+
+  let prompt = params.prompt?.trim() ?? "";
+  let resumeSteps: AgentStep[] = [];
+  let resumedFrom: string | null = null;
+  let modelOverride = params.model?.trim();
+
+  if (resumeFromGenerationId) {
+    const source = await db.prepare("SELECT prompt, model, steps_json, status FROM generations WHERE id = ? AND project_id = ? AND workspace_id = ?")
+      .bind(resumeFromGenerationId, projectId, workspaceId).first<{ prompt: string; model: string; steps_json: string; status: string }>();
+    if (!source) return { httpStatus: 404, body: { error: "The original run was not found." } };
+    if (source.status !== "error" && source.status !== "cancelled") {
+      return { httpStatus: 409, body: { error: "Only a failed or stopped run can be resumed." } };
+    }
+    prompt = source.prompt;
+    if (!modelOverride) modelOverride = source.model;
+    try {
+      const parsed = JSON.parse(source.steps_json) as unknown;
+      if (Array.isArray(parsed)) resumeSteps = parsed as AgentStep[];
+    } catch {
+      resumeSteps = [];
+    }
+    resumedFrom = resumeFromGenerationId;
+  }
+  if (!prompt) return { httpStatus: 400, body: { error: "prompt is required." } };
+
+  if (modelOverride && !isAgentModelId(modelOverride)) return { httpStatus: 400, body: { error: "This AI model is not available.", code: "INVALID_MODEL" } };
+  const selectedModel: AgentModelId = modelOverride && isAgentModelId(modelOverride) ? modelOverride : CONFIGURED_DEFAULT_MODEL;
 
   const recentRuns = await db.prepare("SELECT COUNT(*) AS count FROM generations WHERE user_email = ? AND created_at > ?")
     .bind(userEmail, new Date(Date.now() - 60_000).toISOString()).first<{ count: number }>();
@@ -128,7 +153,7 @@ export async function runKodoAgent(params: {
   let reserved = false;
   let generationInserted = false;
   let cancelled = false;
-  const steps: AgentStep[] = [];
+  const steps: AgentStep[] = [...resumeSteps];
 
   try {
     const reservation = await db.prepare("UPDATE workspaces SET credits = credits - ? WHERE id = ? AND credits >= ?")
@@ -138,8 +163,8 @@ export async function runKodoAgent(params: {
     }
     reserved = true;
 
-    await db.prepare("INSERT INTO generations (id, workspace_id, project_id, user_email, model, prompt, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)")
-      .bind(generationId, workspaceId, projectId, userEmail, selectedModel, prompt.slice(0, 12000), timestamp, timestamp).run();
+    await db.prepare("INSERT INTO generations (id, workspace_id, project_id, user_email, model, prompt, status, resumed_from, steps_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)")
+      .bind(generationId, workspaceId, projectId, userEmail, selectedModel, prompt.slice(0, 12000), resumedFrom, JSON.stringify(steps), timestamp, timestamp).run();
     generationInserted = true;
 
     const recordStep = async (step: AgentStep) => {

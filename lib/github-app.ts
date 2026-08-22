@@ -1,4 +1,5 @@
 import { createSign } from "node:crypto";
+import type { KodoDatabase } from "./db";
 
 function base64Url(value: string) {
   return Buffer.from(value).toString("base64url");
@@ -73,6 +74,17 @@ export function githubHeaders(token: string) {
     "X-GitHub-Api-Version": "2022-11-28",
     "User-Agent": "kodo-diy",
   };
+}
+
+export async function getWorkspaceInstallationId(db: KodoDatabase, workspaceId: string) {
+  const connection = await db.prepare("SELECT metadata_json FROM connections WHERE workspace_id = ? AND provider = 'github' AND status = 'connected'")
+    .bind(workspaceId).first<{ metadata_json: string }>();
+  try {
+    const installationId = String(JSON.parse(connection?.metadata_json ?? "{}").installationId ?? "");
+    return installationId || null;
+  } catch {
+    return null;
+  }
 }
 
 export async function getGitHubInstallationToken(installationId: string) {

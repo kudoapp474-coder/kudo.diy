@@ -1,5 +1,5 @@
 import { all, id, now } from "../../../../../lib/db";
-import { getGitHubInstallationToken, githubHeaders } from "../../../../../lib/github-app";
+import { getGitHubInstallationToken, getWorkspaceInstallationId, githubHeaders } from "../../../../../lib/github-app";
 import { safeProjectPath, slugify } from "../../../../../lib/project-files";
 import { requireApiUser, unauthorized } from "../../../../../lib/server-auth";
 
@@ -88,12 +88,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
     .first<{ id: string; name: string }>();
   if (!project) return Response.json({ error: "Project not found." }, { status: 404 });
 
-  const connection = await auth.db
-    .prepare("SELECT metadata_json FROM connections WHERE workspace_id = ? AND provider = 'github' AND status = 'connected'")
-    .bind(auth.workspaceId)
-    .first<{ metadata_json: string }>();
-  let installationId = "";
-  try { installationId = String(JSON.parse(connection?.metadata_json ?? "{}").installationId ?? ""); } catch { installationId = ""; }
+  const installationId = await getWorkspaceInstallationId(auth.db, auth.workspaceId);
   if (!installationId) {
     return Response.json({
       error: "Connect GitHub before syncing this project.",

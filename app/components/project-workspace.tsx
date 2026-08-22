@@ -4,7 +4,7 @@ import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowUp, Check, ChevronDown, CircleAlert, Code2, Download, ExternalLink, Eye, File, FileCode2,
-  Folder, GitBranch, Github, Globe, History, LoaderCircle, MoreHorizontal, Paperclip, Plus,
+  Folder, GitBranch, GitPullRequest, Github, Globe, History, LoaderCircle, MoreHorizontal, Paperclip, Plus,
   RefreshCw, RotateCcw, Save, Settings2, Sparkles, Square, Terminal, Trash2, X,
 } from "lucide-react";
 import { renderProjectDocument } from "../../lib/project-files";
@@ -26,7 +26,7 @@ type Version = {
   deployment_url: string | null;
 };
 type Deployment = { id: string; version_id: string; environment: string; status: string; url: string | null; created_at: string };
-type GitHubSync = { id: string; repository: string; branch: string; commit_sha: string | null; status: string; url: string | null; error: string | null; created_at: string };
+type GitHubSync = { id: string; repository: string; branch: string; commit_sha: string | null; status: string; url: string | null; error: string | null; pr_number: number | null; pr_url: string | null; pr_state: string | null; created_at: string };
 type GitHubRepository = { name: string; branch: string; private: boolean };
 type GitHubRepositoriesResponse = { connected: boolean; repositories: GitHubRepository[]; connectUrl?: string; error?: string };
 type ProjectData = {
@@ -35,7 +35,7 @@ type ProjectData = {
   workspace: { plan: string; credits: number } | null;
 };
 type AgentStep = { type: string; label: string; status: string };
-type ChatMessage = { id: string; role: "user" | "agent"; text: string; done?: boolean; connectUrl?: string; credits?: number; steps?: AgentStep[]; model?: string };
+type ChatMessage = { id: string; role: "user" | "agent"; text: string; done?: boolean; connectUrl?: string; credits?: number; steps?: AgentStep[]; model?: string; status?: string; generationId?: string; code?: string; fallbackModel?: string };
 type CheckResult = { status?: string; phase?: string; command?: string; stdout?: string; stderr?: string; error?: string };
 type PreviewKind = "desktop" | "mobile";
 
@@ -58,7 +58,7 @@ function messagesFromGenerations(generations: Generation[]): ChatMessage[] {
   if (!generations.length) return [{ id: "welcome", role: "agent", text: "Your real project files are ready. Describe the website and KODO will edit them, run checks and save a version." }];
   return generations.toReversed().flatMap(generation => [
     { id: `${generation.id}-user`, role: "user" as const, text: generation.prompt },
-    { id: `${generation.id}-agent`, role: "agent" as const, text: generation.result || generation.error || "The agent run did not return a summary.", done: generation.status === "complete", credits: generation.credits_used, steps: parseSteps(generation.steps_json), model: generation.model },
+    { id: `${generation.id}-agent`, role: "agent" as const, text: generation.result || generation.error || "The agent run did not return a summary.", done: generation.status === "complete", credits: generation.credits_used, steps: parseSteps(generation.steps_json), model: generation.model, status: generation.status, generationId: generation.id },
   ]);
 }
 
@@ -86,6 +86,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
   const [publishing, setPublishing] = useState(false);
   const [githubOpen, setGithubOpen] = useState(false);
   const [githubBusy, setGithubBusy] = useState(false);
+  const [prBusy, setPrBusy] = useState(false);
   const [githubLoading, setGithubLoading] = useState(false);
   const [githubConnected, setGithubConnected] = useState<boolean | null>(null);
   const [githubRepositories, setGithubRepositories] = useState<GitHubRepository[]>([]);
@@ -109,6 +110,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
   const [runSeconds, setRunSeconds] = useState(0);
   const [activeGenerationId, setActiveGenerationId] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  const [resumingId, setResumingId] = useState("");
   const uploadInput = useRef<HTMLInputElement>(null);
   const phonePreviewViewport = useRef<HTMLDivElement>(null);
   const autoRunStarted = useRef(false);
@@ -208,6 +210,16 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
     return () => observer.disconnect();
   }, [view, previewKind]);
 
+  type AgentResponseBody = { result?: string; error?: string; connectUrl?: string; usage?: { creditsUsed?: number }; steps?: AgentStep[]; model?: string; status?: string; generationId?: string; code?: string; fallbackModel?: string };
+
+  async function finishAgentResponse(response: Response, result: AgentResponseBody) {
+    setLiveSteps(result.steps ?? []);
+    setMessages(current => [...current, { id: `local-agent-${Date.now()}`, role: "agent", text: result.result ?? result.error ?? "The agent could not complete this run.", done: response.ok, connectUrl: result.connectUrl, credits: result.usage?.creditsUsed, steps: result.steps, model: result.model ?? selectedModel, status: result.status, generationId: result.generationId, code: result.code, fallbackModel: result.fallbackModel }]);
+    if (!response.ok) setError(result.error ?? "The agent could not complete this run.");
+    else if (result.status === "cancelled") setNotice("Agent run stopped.");
+    setDrafts({}); await loadProject(); setPreviewNonce(value => value + 1);
+  }
+
   async function runAgent(override?: string) {
     const task = (override ?? prompt).trim();
     if (!task || running) return;
@@ -217,15 +229,25 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
     setPrompt(""); setLiveSteps([]); setRunSeconds(0); setActiveGenerationId(""); setCancelling(false); setRunning(true);
     try {
       const response = await fetch("/api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, prompt: task, model: selectedModel }) });
-      const result = await response.json() as { result?: string; error?: string; connectUrl?: string; usage?: { creditsUsed?: number }; steps?: AgentStep[]; model?: string; status?: string };
-      setLiveSteps(result.steps ?? []);
-      setMessages(current => [...current, { id: `local-agent-${Date.now()}`, role: "agent", text: result.result ?? result.error ?? "The agent could not complete this run.", done: response.ok, connectUrl: result.connectUrl, credits: result.usage?.creditsUsed, steps: result.steps, model: result.model ?? selectedModel }]);
-      if (!response.ok) setError(result.error ?? "The agent could not complete this run.");
-      else if (result.status === "cancelled") setNotice("Agent run stopped.");
-      setDrafts({}); await loadProject(); setPreviewNonce(value => value + 1);
+      const result = await response.json() as AgentResponseBody;
+      await finishAgentResponse(response, result);
       window.history.replaceState(null, "", `/project/${projectId}`);
     } catch { setError("KODO could not reach the agent service. Your reserved credits were not charged."); }
     finally { setRunning(false); setCancelling(false); setActiveGenerationId(""); }
+  }
+
+  async function resumeRun(generationId: string, modelOverride?: string) {
+    if (running) return;
+    setError(""); setNotice("");
+    setResumingId(generationId);
+    setMessages(current => [...current, { id: `local-user-${Date.now()}`, role: "user", text: modelOverride ? `Retry with ${agentModelLabel(modelOverride)}` : "Resume from the last checkpoint" }]);
+    setLiveSteps([]); setRunSeconds(0); setActiveGenerationId(""); setCancelling(false); setRunning(true);
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/generations/${encodeURIComponent(generationId)}/resume`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(modelOverride ? { model: modelOverride } : {}) });
+      const result = await response.json() as AgentResponseBody;
+      await finishAgentResponse(response, result);
+    } catch { setError("KODO could not reach the agent service. Your reserved credits were not charged."); }
+    finally { setRunning(false); setCancelling(false); setActiveGenerationId(""); setResumingId(""); }
   }
 
   async function cancelRun() {
@@ -350,6 +372,38 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
     }
   }
 
+  async function openPullRequest() {
+    if (prBusy) return;
+    setPrBusy(true); setError("");
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/github/pull-request`, { method: "POST" });
+      const result = await response.json() as { error?: string; pullRequest?: { url?: string } };
+      if (!response.ok) setError(result.error ?? "Could not open the pull request.");
+      else setNotice("Pull request opened.");
+      await loadProject();
+    } catch {
+      setError("KODO could not reach GitHub to open the pull request.");
+    } finally {
+      setPrBusy(false);
+    }
+  }
+
+  async function mergePullRequest() {
+    if (prBusy || !window.confirm("Merge this pull request on GitHub?")) return;
+    setPrBusy(true); setError("");
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/github/pull-request/merge`, { method: "POST" });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) setError(result.error ?? "Could not merge this pull request.");
+      else setNotice("Pull request merged.");
+      await loadProject();
+    } catch {
+      setError("KODO could not reach GitHub to merge the pull request.");
+    } finally {
+      setPrBusy(false);
+    }
+  }
+
   async function openGitHubDialog() {
     setGithubOpen(true);
     setGithubLoading(true);
@@ -424,7 +478,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
     <main className="builder-shell">
       <header className="builder-topbar">
         <div><Link className="builder-logo" href="/"><BrandLogo size="compact" /></Link><span className="builder-divider" /><Link className="builder-project-name" href="/projects"><span className="project-glyph violet"><Sparkles size={12} /></span><b>{data?.project.name ?? projectId}</b><ChevronDown size={13} /></Link></div>
-        <div className="builder-top-actions"><span className={`save-state ${dirty ? "dirty" : ""}`}>{dirty ? <CircleAlert size={12} /> : <Check size={12} />} {dirty ? "Unsaved" : "Saved"}</span><button onClick={() => void openGitHubDialog()}><GitBranch size={14} /> {data?.project.branch ?? "main"} <ChevronDown size={12} /></button><button className="share-btn" onClick={() => void shareProject()}>Share</button><button className="publish-btn" onClick={() => setPublishOpen(true)}><Globe size={14} /> Publish</button><span className="builder-credits">{Number(data?.workspace?.credits ?? 0).toLocaleString("en-IN")} credits</span></div>
+        <div className="builder-top-actions"><span className={`save-state ${dirty ? "dirty" : ""}`}>{dirty ? <CircleAlert size={12} /> : <Check size={12} />} {dirty ? "Unsaved" : "Saved"}</span><button onClick={() => void openGitHubDialog()}><GitBranch size={14} /> {data?.project.branch ?? "main"} <ChevronDown size={12} /></button><a className="export-zip-btn" href={`/api/projects/${encodeURIComponent(projectId)}/export`} aria-label="Download project as ZIP" title="Download project as ZIP"><Download size={14} /></a><button className="share-btn" onClick={() => void shareProject()}>Share</button><button className="publish-btn" onClick={() => setPublishOpen(true)}><Globe size={14} /> Publish</button><span className="builder-credits">{Number(data?.workspace?.credits ?? 0).toLocaleString("en-IN")} credits</span></div>
       </header>
       {(error || notice) ? <div className={`builder-toast ${error ? "error" : "success"}`}><span>{error || notice}</span><button onClick={() => { setError(""); setNotice(""); }}><X size={14} /></button></div> : null}
       <div className="builder-body">
@@ -432,7 +486,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
           <div className="agent-panel-head"><div><span className="online-dot" /><b>KODO Agent</b></div><button aria-label="Agent options"><MoreHorizontal size={17} /></button></div>
           <div className="conversation">
             <div className="agent-intro"><span><Sparkles size={16} /></span><h1>Build with KODO</h1><p>Ask for a complete website or a precise edit. Every real file and version stays in this project.</p></div>
-            {messages.map(message => <div className={`message ${message.role}`} key={message.id}><span className="message-role">{message.role === "user" ? "You" : <><Sparkles size={11} /> KODO{message.model ? ` · ${agentModelLabel(message.model)}` : ""}</>}</span><p>{message.text}</p>{message.connectUrl ? <a className="message-connect" href={message.connectUrl}>Open integrations</a> : null}{message.done ? (() => { const madeEdits = message.steps?.some(step => step.type === "edit"); return <div className="change-summary">{madeEdits ? <span><Check size={12} /> Agent run completed{message.credits ? ` · ${message.credits} credits` : ""}</span> : <span><CircleAlert size={12} /> No file changes were made{message.credits ? ` · ${message.credits} credits` : ""}</span>}{message.steps?.slice(-5).map((step, index) => <div key={`${step.label}-${index}`}><FileCode2 size={13} /><b>{step.label}</b><em>{step.status}</em></div>)}<button onClick={() => setView("code")}>Review real files</button></div>; })() : null}</div>)}
+            {messages.map(message => <div className={`message ${message.role}`} key={message.id}><span className="message-role">{message.role === "user" ? "You" : <><Sparkles size={11} /> KODO{message.model ? ` · ${agentModelLabel(message.model)}` : ""}</>}</span><p>{message.text}</p>{message.connectUrl ? <a className="message-connect" href={message.connectUrl}>Open integrations</a> : null}{message.done ? (() => { const madeEdits = message.steps?.some(step => step.type === "edit"); return <div className="change-summary">{madeEdits ? <span><Check size={12} /> Agent run completed{message.credits ? ` · ${message.credits} credits` : ""}</span> : <span><CircleAlert size={12} /> No file changes were made{message.credits ? ` · ${message.credits} credits` : ""}</span>}{message.steps?.slice(-5).map((step, index) => <div key={`${step.label}-${index}`}><FileCode2 size={13} /><b>{step.label}</b><em>{step.status}</em></div>)}<button onClick={() => setView("code")}>Review real files</button></div>; })() : null}{(message.status === "error" || message.status === "cancelled") && message.generationId ? <div className="change-summary"><span><CircleAlert size={12} /> {message.status === "cancelled" ? "Run stopped" : "Run failed"}{message.credits ? ` · ${message.credits} credits` : ""}</span><button disabled={running} onClick={() => void resumeRun(message.generationId!)}>{resumingId === message.generationId ? "Resuming…" : "Resume from checkpoint"}</button>{message.fallbackModel ? <button disabled={running} onClick={() => void resumeRun(message.generationId!, message.fallbackModel)}>{resumingId === message.generationId ? "Retrying…" : `Retry with ${agentModelLabel(message.fallbackModel)}`}</button> : null}</div> : null}</div>)}
             {running ? <div className="message agent running-message">
               <span className="message-role"><Sparkles size={11} /> KODO · {agentModelLabel(selectedModel)}</span>
               <div className="thinking-line"><i /><span>{currentRunPhase >= 0 ? RUN_PHASES[currentRunPhase]?.label : "Finishing the agent response"}</span><time>{runSeconds}s</time><button type="button" className="stop-run-btn" disabled={!activeGenerationId || cancelling} onClick={() => void cancelRun()}><Square size={11} /> {cancelling ? "Stopping…" : "Stop"}</button></div>
@@ -477,6 +531,13 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
           {latestGitHubSync ? <div className={`latest-github-sync ${latestGitHubSync.status}`}>
             <span>{latestGitHubSync.status === "ready" ? <Check size={13} /> : latestGitHubSync.status === "failed" ? <CircleAlert size={13} /> : <LoaderCircle size={13} />} {latestGitHubSync.repository} · {latestGitHubSync.branch}</span>
             {latestGitHubSync.url ? <a href={latestGitHubSync.url} target="_blank" rel="noreferrer">Commit <ExternalLink size={11} /></a> : <em>{latestGitHubSync.status}</em>}
+          </div> : null}
+          {latestGitHubSync?.status === "ready" ? <div className={`latest-github-pr ${latestGitHubSync.pr_state ?? ""}`}>
+            {latestGitHubSync.pr_number ? <>
+              <span><GitPullRequest size={13} /> #{latestGitHubSync.pr_number} · {latestGitHubSync.pr_state ?? "open"}</span>
+              {latestGitHubSync.pr_url ? <a href={latestGitHubSync.pr_url} target="_blank" rel="noreferrer">View <ExternalLink size={11} /></a> : null}
+              {latestGitHubSync.pr_state === "open" ? <button disabled={prBusy} onClick={() => void mergePullRequest()}>{prBusy ? "Merging…" : "Merge pull request"}</button> : null}
+            </> : <button disabled={prBusy} onClick={() => void openPullRequest()}><GitPullRequest size={13} /> {prBusy ? "Opening…" : "Open pull request"}</button>}
           </div> : null}
           {githubLoading ? <div className="github-picker-state loading"><LoaderCircle size={15} /> Loading approved repositories…</div>
             : githubLoadError ? <div className="github-picker-state error"><CircleAlert size={15} /><span>{githubLoadError}</span><button onClick={() => void openGitHubDialog()}>Try again</button></div>
