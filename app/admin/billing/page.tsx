@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 import { all } from "../../../lib/db";
 import { isKodoAdmin } from "../../../lib/admin-auth";
-import { agentModelLabel, estimateAgentCostUsd } from "../../../lib/agent-models";
+import { AGENT_RUN_RESERVATION_CREDITS, agentModelLabel, estimateAgentCostUsd } from "../../../lib/agent-models";
+import { agentSpendAlert, dailyAgentCreditLimit } from "../../../lib/agent-spend";
 import { requireApiUser } from "../../../lib/server-auth";
 import { AdminCreditAdjustment } from "../../components/admin-credit-adjustment";
 import { ProductShell } from "../../components/product-shell";
@@ -48,6 +49,7 @@ type BuilderSummaryRow = { total_generations: number; completed_generations: num
 type GenerationRow = { id: string; project_id: string; project_name: string; prompt: string; status: string; model: string; credits_used: number; created_at: string };
 type DeploymentRow = { id: string; project_id: string; project_name: string; environment: string; status: string; url: string | null; created_at: string };
 type ModelUsageRow = { model: string; total_generations: number; completed_generations: number; input_tokens: number; output_tokens: number; credits_used: number };
+type WorkspaceSpendRow = { id: string; owner_email: string; name: string; plan: string; credits_24h: number | string; runs_24h: number | string };
 
 function formatDate(value: string | null) {
   if (!value) return "—";
@@ -73,6 +75,7 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
 
   const query = (await searchParams).q?.trim().slice(0, 120) ?? "";
   const like = `%${query.toLowerCase()}%`;
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const workspaceSql = `
     SELECT
       w.id,
@@ -92,7 +95,7 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
   `;
 
   const workspaceStatement = auth.db.prepare(workspaceSql);
-  const [workspaces, summary, billingEvents, adjustments, builderSummary, generations, deployments, modelUsage] = await Promise.all([
+  const [workspaces, summary, billingEvents, adjustments, builderSummary, generations, deployments, modelUsage, workspaceSpend] = await Promise.all([
     all<WorkspaceRow>(query ? workspaceStatement.bind(like, like, like) : workspaceStatement),
     auth.db.prepare(`
       SELECT
@@ -128,7 +131,25 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
       FROM generations
       GROUP BY model
       ORDER BY credits_used DESC`)),
+    all<WorkspaceSpendRow>(auth.db.prepare(`SELECT
+      w.id,
+      w.owner_email,
+      w.name,
+      w.plan,
+      COALESCE(SUM(CASE
+        WHEN g.created_at > ? AND g.status = 'running' THEN ${AGENT_RUN_RESERVATION_CREDITS}
+        WHEN g.created_at > ? AND g.status = 'complete' THEN g.credits_used
+        ELSE 0
+      END), 0) AS credits_24h,
+      COALESCE(SUM(CASE WHEN g.created_at > ? AND g.status IN ('running', 'complete') THEN 1 ELSE 0 END), 0) AS runs_24h
+      FROM workspaces w
+      LEFT JOIN generations g ON g.workspace_id = w.id
+      GROUP BY w.id, w.owner_email, w.name, w.plan
+      ORDER BY credits_24h DESC
+      LIMIT 20`).bind(since24h, since24h, since24h)),
   ]);
+
+  const activeSpendRows = workspaceSpend.filter(row => Number(row.credits_24h ?? 0) > 0);
 
   return (
     <ProductShell active="admin" title="Billing admin" context="Operations">
@@ -145,6 +166,30 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
           <article><span>Completed builds</span><strong>{Number(builderSummary?.completed_generations ?? 0).toLocaleString("en-IN")}</strong></article>
           <article><span>Failed builds</span><strong>{Number(builderSummary?.failed_generations ?? 0).toLocaleString("en-IN")}</strong></article>
           <article><span>Deployments</span><strong>{Number(builderSummary?.total_deployments ?? 0).toLocaleString("en-IN")}</strong></article>
+        </section>
+
+        <section className="admin-panel">
+          <header><div><span>AI spend guardrails</span><h2>Workspace usage · rolling 24 hours</h2></div><small>Watch at 50%, high at 80%, blocked at 100% of the plan limit. Running agents count as a 20-credit reservation.</small></header>
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead><tr><th>Workspace</th><th>Plan</th><th>Runs</th><th>Credits / limit</th><th>Guardrail</th></tr></thead>
+              <tbody>
+                {activeSpendRows.map(row => {
+                  const used = Number(row.credits_24h ?? 0);
+                  const limit = dailyAgentCreditLimit(row.plan);
+                  const alert = agentSpendAlert(used, limit);
+                  return <tr key={row.id}>
+                    <td><b>{row.name}</b><small>{row.owner_email}</small></td>
+                    <td><strong>{row.plan}</strong></td>
+                    <td><strong>{Number(row.runs_24h ?? 0).toLocaleString("en-IN")}</strong></td>
+                    <td><strong>{used.toLocaleString("en-IN")} / {limit.toLocaleString("en-IN")}</strong><small>{Math.max(0, limit - used).toLocaleString("en-IN")} remaining</small></td>
+                    <td><strong>{alert.percent}%</strong><small>{alert.level}</small></td>
+                  </tr>;
+                })}
+                {!activeSpendRows.length && <tr><td colSpan={5} className="admin-empty">No AI credit spend in the last 24 hours.</td></tr>}
+              </tbody>
+            </table>
+          </div>
         </section>
 
         <section className="admin-panel">

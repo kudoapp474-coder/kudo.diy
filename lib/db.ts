@@ -72,6 +72,7 @@ export async function ensureDatabase() {
     db.prepare("CREATE INDEX IF NOT EXISTS projects_workspace_idx ON projects(workspace_id, updated_at)"),
     db.prepare("CREATE TABLE IF NOT EXISTS generations (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, project_id TEXT NOT NULL, user_email TEXT NOT NULL, model TEXT NOT NULL, prompt TEXT NOT NULL, result TEXT, steps_json TEXT NOT NULL DEFAULT '[]', status TEXT NOT NULL DEFAULT 'pending', input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, credits_used INTEGER NOT NULL DEFAULT 0, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"),
     db.prepare("CREATE INDEX IF NOT EXISTS generations_project_idx ON generations(project_id, created_at)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS agent_run_locks (workspace_id TEXT PRIMARY KEY, generation_id TEXT NOT NULL, acquired_at TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS project_files (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, language TEXT NOT NULL DEFAULT 'text', updated_at TEXT NOT NULL)"),
     db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS project_files_path_idx ON project_files(project_id, path)"),
     db.prepare("CREATE TABLE IF NOT EXISTS versions (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, generation_id TEXT, label TEXT NOT NULL, snapshot_json TEXT NOT NULL, created_at TEXT NOT NULL)"),
