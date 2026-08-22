@@ -3,5 +3,8 @@
   "framework": "nextjs",
   "installCommand": "npm ci",
   "buildCommand": "next build --webpack",
-  "outputDirectory": ".next"
+  "outputDirectory": ".next",
+  "crons": [
+    { "path": "/api/automations/run-scheduled", "schedule": "0 9 * * *" }
+  ]
 }
