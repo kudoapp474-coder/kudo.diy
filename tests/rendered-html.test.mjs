@@ -45,7 +45,7 @@ test("wires the real prompt-to-publish builder flow", async () => {
     readFile(new URL("../app/p/[projectId]/route.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(workspace, /fetch\("\/api\/projects"/);
+  assert.match(workspace, /fetch\("\/api\/projects"/);\n  assert.match(workspace, /fetch\("\/api\/uploads"/);\n  assert.match(workspace, /MAX_CONTEXT_FILES = 5/);\n  assert.match(workspace, /type="file" multiple/);
   assert.match(projectApi, /starterProjectFiles/);
   assert.match(builder, /fetch\("\/api\/agent"/);
   assert.match(builder, /srcDoc=\{previewDocument\}/);
