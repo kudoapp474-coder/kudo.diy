@@ -14,9 +14,12 @@ type ProjectFile = { id: string; path: string; content: string; language: string
 type Generation = { id: string; prompt: string; result: string | null; status: string; model: string; credits_used: number; error: string | null; steps_json: string; created_at: string };
 type Version = { id: string; label: string; generation_id: string | null; created_at: string };
 type Deployment = { id: string; version_id: string; environment: string; status: string; url: string | null; created_at: string };
+type GitHubSync = { id: string; repository: string; branch: string; commit_sha: string | null; status: string; url: string | null; error: string | null; created_at: string };
+type GitHubRepository = { name: string; branch: string; private: boolean };
+type GitHubRepositoriesResponse = { connected: boolean; repositories: GitHubRepository[]; connectUrl?: string; error?: string };
 type ProjectData = {
   project: { id: string; name: string; description: string; repository: string | null; branch: string; status: string; preview_url: string | null; production_url: string | null };
-  files: ProjectFile[]; generations: Generation[]; versions: Version[]; deployments: Deployment[];
+  files: ProjectFile[]; generations: Generation[]; versions: Version[]; deployments: Deployment[]; githubSyncs: GitHubSync[];
   workspace: { plan: string; credits: number } | null;
 };
 type AgentStep = { type: string; label: string; status: string };
@@ -51,6 +54,11 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
   const [publishing, setPublishing] = useState(false);
   const [githubOpen, setGithubOpen] = useState(false);
   const [githubBusy, setGithubBusy] = useState(false);
+  const [githubLoading, setGithubLoading] = useState(false);
+  const [githubConnected, setGithubConnected] = useState<boolean | null>(null);
+  const [githubRepositories, setGithubRepositories] = useState<GitHubRepository[]>([]);
+  const [githubLoadError, setGithubLoadError] = useState("");
+  const [githubConnectUrl, setGithubConnectUrl] = useState("/api/github/connect");
   const [githubRepository, setGithubRepository] = useState("");
   const [githubBranch, setGithubBranch] = useState("");
   const [data, setData] = useState<ProjectData | null>(null);
@@ -114,6 +122,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
   const editorValue = drafts[selectedPath] ?? selectedFile?.content ?? "";
   const dirty = Boolean(selectedFile && editorValue !== selectedFile.content);
   const latestDeployment = data?.deployments[0] ?? null;
+  const latestGitHubSync = data?.githubSyncs?.[0] ?? null;
   const latestUrl = data?.deployments.find(deployment => deployment.status === "ready" && deployment.url)?.url || data?.project.production_url || data?.project.preview_url;
 
   async function runAgent(override?: string) {
@@ -224,10 +233,47 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
 
   async function exportToGitHub() {
     if (!githubRepository.trim() || githubBusy) return; setGithubBusy(true); setError("");
-    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/github`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repository: githubRepository, branch: githubBranch }) });
-    const result = await response.json() as { error?: string; repository?: string; branch?: string };
-    if (!response.ok) setError(result.error ?? "GitHub export failed."); else { setNotice(`Project committed to ${result.repository} on ${result.branch}.`); setGithubOpen(false); await loadProject(); }
-    setGithubBusy(false);
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/github`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repository: githubRepository, branch: githubBranch }) });
+      const result = await response.json() as { error?: string; repository?: string; branch?: string; url?: string; connectUrl?: string };
+      if (!response.ok) {
+        setError(result.error ?? "GitHub sync failed.");
+        if (result.connectUrl) setGithubConnectUrl(result.connectUrl);
+        await loadProject();
+      } else {
+        setNotice(`Project synced to ${result.repository} on ${result.branch}.`);
+        setGithubOpen(false);
+        await loadProject();
+      }
+    } catch {
+      setError("KODO could not reach the GitHub sync service. No repository changes were confirmed.");
+    } finally {
+      setGithubBusy(false);
+    }
+  }
+
+  async function openGitHubDialog() {
+    setGithubOpen(true);
+    setGithubLoading(true);
+    setGithubLoadError("");
+    try {
+      const response = await fetch(`/api/github/repositories?returnTo=${encodeURIComponent(`/project/${projectId}`)}`, { cache: "no-store" });
+      const result = await response.json() as GitHubRepositoriesResponse;
+      if (!response.ok) throw new Error(result.error ?? "Could not load approved repositories.");
+      setGithubConnected(result.connected);
+      setGithubRepositories(result.repositories ?? []);
+      setGithubConnectUrl(result.connectUrl ?? `/api/github/connect?returnTo=/project/${encodeURIComponent(projectId)}`);
+      setGithubRepository(current => {
+        if (result.repositories.some(repository => repository.name === current)) return current;
+        const saved = data?.project.repository;
+        if (saved && result.repositories.some(repository => repository.name === saved)) return saved;
+        return result.repositories[0]?.name ?? "";
+      });
+    } catch (reason) {
+      setGithubLoadError(reason instanceof Error ? reason.message : "Could not load approved repositories.");
+    } finally {
+      setGithubLoading(false);
+    }
   }
 
   async function createCheckpoint() {
@@ -251,7 +297,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
     <main className="builder-shell">
       <header className="builder-topbar">
         <div><Link className="builder-logo" href="/"><BrandLogo size="compact" /></Link><span className="builder-divider" /><Link className="builder-project-name" href="/projects"><span className="project-glyph violet"><Sparkles size={12} /></span><b>{data?.project.name ?? projectId}</b><ChevronDown size={13} /></Link></div>
-        <div className="builder-top-actions"><span className={`save-state ${dirty ? "dirty" : ""}`}>{dirty ? <CircleAlert size={12} /> : <Check size={12} />} {dirty ? "Unsaved" : "Saved"}</span><button onClick={() => setGithubOpen(true)}><GitBranch size={14} /> {data?.project.branch ?? "main"} <ChevronDown size={12} /></button><button className="share-btn" onClick={() => void shareProject()}>Share</button><button className="publish-btn" onClick={() => setPublishOpen(true)}><Globe size={14} /> Publish</button><span className="builder-credits">{Number(data?.workspace?.credits ?? 0).toLocaleString("en-IN")} credits</span></div>
+        <div className="builder-top-actions"><span className={`save-state ${dirty ? "dirty" : ""}`}>{dirty ? <CircleAlert size={12} /> : <Check size={12} />} {dirty ? "Unsaved" : "Saved"}</span><button onClick={() => void openGitHubDialog()}><GitBranch size={14} /> {data?.project.branch ?? "main"} <ChevronDown size={12} /></button><button className="share-btn" onClick={() => void shareProject()}>Share</button><button className="publish-btn" onClick={() => setPublishOpen(true)}><Globe size={14} /> Publish</button><span className="builder-credits">{Number(data?.workspace?.credits ?? 0).toLocaleString("en-IN")} credits</span></div>
       </header>
       {(error || notice) ? <div className={`builder-toast ${error ? "error" : "success"}`}><span>{error || notice}</span><button onClick={() => { setError(""); setNotice(""); }}><X size={14} /></button></div> : null}
       <div className="builder-body">
@@ -272,7 +318,27 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
         </section>
       </div>
       {publishOpen ? <div className="publish-layer" role="dialog" aria-modal="true"><button className="publish-scrim" onClick={() => setPublishOpen(false)} aria-label="Close" /><section className="publish-dialog"><button className="dialog-close" onClick={() => setPublishOpen(false)}><X size={18} /></button><span className="publish-icon"><Globe size={22} /></span><h2>Build and deploy</h2><p>KODO will run the production build in Vercel Sandbox, freeze a version and create a real Vercel preview or production URL.</p><div className="publish-checks"><span><Check size={13} /> Real project files</span><span><Check size={13} /> Versioned deployment</span><span><Check size={13} /> Live deployment status</span></div>{latestDeployment ? <div className={`latest-deployment ${latestDeployment.status}`}><span>{latestDeployment.status === "ready" ? <Check size={13} /> : latestDeployment.status === "failed" ? <CircleAlert size={13} /> : <LoaderCircle size={13} />} {latestDeployment.environment} · {latestDeployment.status}</span>{latestDeployment.url ? <a href={latestDeployment.url} target="_blank" rel="noreferrer">Open <ExternalLink size={11} /></a> : null}</div> : null}<button className="confirm-publish" disabled={publishing} onClick={() => void publish("production")}><Play size={14} /> {publishing ? "Building and deploying…" : "Deploy production"}</button><button className="preview-publish" disabled={publishing} onClick={() => void publish("preview")}>Create Vercel preview</button></section></div> : null}
-      {githubOpen ? <div className="publish-layer" role="dialog" aria-modal="true"><button className="publish-scrim" onClick={() => setGithubOpen(false)} aria-label="Close" /><section className="publish-dialog github-dialog"><button className="dialog-close" onClick={() => setGithubOpen(false)}><X size={18} /></button><span className="publish-icon"><Github size={22} /></span><h2>Commit to GitHub</h2><p>Export every text file as one atomic commit to a branch in a repository connected to the KODO GitHub App.</p><label>Repository<input value={githubRepository} onChange={event => setGithubRepository(event.target.value)} placeholder="owner/repository" /></label><label>Branch (optional)<input value={githubBranch} onChange={event => setGithubBranch(event.target.value)} placeholder="kodo/my-project" /></label><button className="confirm-publish" disabled={!githubRepository.trim() || githubBusy} onClick={() => void exportToGitHub()}><GitBranch size={14} /> {githubBusy ? "Creating commit…" : "Commit project"}</button><a className="github-connect-link" href="/api/github/connect">Connect or update GitHub access</a></section></div> : null}
+      {githubOpen ? <div className="publish-layer" role="dialog" aria-modal="true">
+        <button className="publish-scrim" onClick={() => setGithubOpen(false)} aria-label="Close" />
+        <section className="publish-dialog github-dialog">
+          <button className="dialog-close" onClick={() => setGithubOpen(false)}><X size={18} /></button>
+          <span className="publish-icon"><Github size={22} /></span>
+          <h2>Sync to GitHub</h2>
+          <p>KODO writes every current text file as one atomic commit. Later syncs also remove files deleted inside this project.</p>
+          {latestGitHubSync ? <div className={`latest-github-sync ${latestGitHubSync.status}`}>
+            <span>{latestGitHubSync.status === "ready" ? <Check size={13} /> : latestGitHubSync.status === "failed" ? <CircleAlert size={13} /> : <LoaderCircle size={13} />} {latestGitHubSync.repository} · {latestGitHubSync.branch}</span>
+            {latestGitHubSync.url ? <a href={latestGitHubSync.url} target="_blank" rel="noreferrer">Commit <ExternalLink size={11} /></a> : <em>{latestGitHubSync.status}</em>}
+          </div> : null}
+          {githubLoading ? <div className="github-picker-state loading"><LoaderCircle size={15} /> Loading approved repositories…</div>
+            : githubLoadError ? <div className="github-picker-state error"><CircleAlert size={15} /><span>{githubLoadError}</span><button onClick={() => void openGitHubDialog()}>Try again</button></div>
+              : githubConnected === false ? <div className="github-picker-state">Connect the KODO GitHub App first.</div>
+                : githubRepositories.length ? <label>Repository<select aria-label="Repository" value={githubRepository} onChange={event => setGithubRepository(event.target.value)}>{githubRepositories.map(repository => <option value={repository.name} key={repository.name}>{repository.name}{repository.private ? " · Private" : " · Public"}</option>)}</select></label>
+                  : <div className="github-picker-state error"><CircleAlert size={15} /> No approved repositories are available.</div>}
+          <label>Branch (optional)<input value={githubBranch} onChange={event => setGithubBranch(event.target.value)} placeholder="KODO will create a safe project branch" /></label>
+          <button className="confirm-publish" disabled={githubConnected !== true || !githubRepositories.some(repository => repository.name === githubRepository) || githubBusy || githubLoading} onClick={() => void exportToGitHub()}><GitBranch size={14} /> {githubBusy ? "Syncing files…" : "Sync project"}</button>
+          <a className="github-connect-link" href={githubConnectUrl}>{githubConnected === false ? "Connect GitHub" : "Update approved repositories"}</a>
+        </section>
+      </div> : null}
     </main>
   );
 }

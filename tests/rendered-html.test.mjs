@@ -63,14 +63,18 @@ test("wires the real prompt-to-publish builder flow", async () => {
   assert.doesNotMatch(builder, /Acme Labs|fake code|fake publish/i);
 });
 
-test("wires live GitHub repository connections", async () => {
-  const [views, manager, repositoriesApi, connectApi, callbackApi, githubApp] = await Promise.all([
+test("wires live GitHub repository connections and atomic project sync", async () => {
+  const [views, manager, repositoriesApi, connectApi, callbackApi, githubApp, builder, syncApi, projectApi, database] = await Promise.all([
     readFile(new URL("../app/components/product-views.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/repositories-manager.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/github/repositories/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/github/connect/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/github/callback/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/github-app.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/project-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/projects/[projectId]/github/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/projects/[projectId]/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/db.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(views, /api\/github\/connect\?returnTo=\/repositories/);
@@ -83,5 +87,14 @@ test("wires live GitHub repository connections", async () => {
   assert.match(githubApp, /normalizeGitHubPrivateKey/);
   assert.match(githubApp, /base64-encoded PEM/);
   assert.match(githubApp, /complete PEM contents/);
+  assert.match(builder, /api\/github\/repositories\?returnTo=/);
+  assert.match(builder, /Sync to GitHub/);
+  assert.match(builder, /latestGitHubSync/);
+  assert.match(syncApi, /\.kodo\/project-manifest\.json/);
+  assert.match(syncApi, /deletedPaths\.map/);
+  assert.match(syncApi, /parents: headSha \? \[headSha\] : \[\]/);
+  assert.match(syncApi, /status = 'ready'/);
+  assert.match(projectApi, /githubSyncs/);
+  assert.match(database, /CREATE TABLE IF NOT EXISTS github_syncs/);
   assert.doesNotMatch(views, /kodo\/web|kodo\/dashboard/);
 });
