@@ -21,9 +21,15 @@ function readInstallationId(metadata: string | null | undefined) {
   }
 }
 
-export async function GET() {
+function safeReturnTo(value: string | null) {
+  return value?.startsWith("/") && !value.startsWith("//") ? value : "/repositories";
+}
+
+export async function GET(request: Request) {
   const auth = await requireApiUser();
   if (!auth) return unauthorized();
+  const returnTo = safeReturnTo(new URL(request.url).searchParams.get("returnTo"));
+  const connectUrl = `/api/github/connect?returnTo=${encodeURIComponent(returnTo)}`;
 
   const connection = await auth.db
     .prepare("SELECT account_label, metadata_json FROM connections WHERE workspace_id = ? AND provider = 'github' AND status = 'connected'")
@@ -32,7 +38,7 @@ export async function GET() {
   const installationId = readInstallationId(connection?.metadata_json);
 
   if (!installationId) {
-    return Response.json({ connected: false, repositories: [], connectUrl: "/api/github/connect?returnTo=/repositories" });
+    return Response.json({ connected: false, repositories: [], connectUrl });
   }
 
   try {
@@ -60,7 +66,7 @@ export async function GET() {
       connected: true,
       account: connection?.account_label ?? null,
       repositories,
-      connectUrl: "/api/github/connect?returnTo=/repositories",
+      connectUrl,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not load GitHub repositories.";
