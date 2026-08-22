@@ -91,6 +91,9 @@ test("wires live GitHub repository connections and atomic project sync", async (
   assert.match(builder, /Sync to GitHub/);
   assert.match(builder, /latestGitHubSync/);
   assert.match(syncApi, /\.kodo\/project-manifest\.json/);
+  assert.match(syncApi, /framework: null/);
+  assert.match(syncApi, /outputDirectory: "dist"/);
+  assert.match(syncApi, /VERCEL_CONFIG_PATH/);
   assert.match(syncApi, /deletedPaths\.map/);
   assert.match(syncApi, /parents: headSha \? \[headSha\] : \[\]/);
   assert.match(syncApi, /status = 'ready'/);
