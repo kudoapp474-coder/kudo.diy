@@ -102,6 +102,7 @@ export async function ensureDatabase() {
     db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS workspace_members_token_idx ON workspace_members(invite_token)"),
   ]);
   try { await db.prepare("ALTER TABLE automations ADD COLUMN project_id TEXT").run(); } catch { /* already migrated */ }
+  try { await db.prepare("ALTER TABLE generations ADD COLUMN cancel_requested_at TEXT").run(); } catch { /* already migrated */ }
   return db;
 }
 

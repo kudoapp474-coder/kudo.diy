@@ -127,6 +127,7 @@ export async function runKodoAgent(params: {
 
   let reserved = false;
   let generationInserted = false;
+  let cancelled = false;
   const steps: AgentStep[] = [];
 
   try {
@@ -145,6 +146,10 @@ export async function runKodoAgent(params: {
       steps.push(step);
       await db.prepare("UPDATE generations SET steps_json = ?, updated_at = ? WHERE id = ?")
         .bind(JSON.stringify(steps), now(), generationId).run();
+      if (!cancelled) {
+        const cancelRow = await db.prepare("SELECT cancel_requested_at FROM generations WHERE id = ?").bind(generationId).first<{ cancel_requested_at: string | null }>();
+        if (cancelRow?.cancel_requested_at) cancelled = true;
+      }
     };
 
     const creditBudgetStop = agentCreditStopCondition(selectedModel, runCreditBudget);
@@ -157,6 +162,7 @@ When applyProjectFiles is requested, send the complete contents of every file re
 Every website must be responsive, accessible, visually polished, and use real copy instead of placeholders. Implement interactions in script.js. Never claim a check passed if the sandbox reports skipped or failed. Keep the final response concise and list the files changed.`,
       stopWhen: [
         isStepCount(12),
+        () => cancelled,
         ({ steps: completedSteps }) => lastStepIndex(steps, "edit") >= 0 && creditBudgetStop({ steps: completedSteps }),
       ],
       prepareStep: ({ steps: completedSteps }) => {
@@ -281,22 +287,29 @@ Every website must be responsive, accessible, visually polished, and use real co
       inputTokens,
       outputTokens,
       madeFileEdits,
+      cancelled,
       stepTypes: steps.map(step => `${step.type}:${step.status}`),
     });
     const creditsUsed = madeFileEdits ? Math.min(rawCreditsUsed, runCreditBudget) : 0;
     const budgetLimited = rawCreditsUsed >= runCreditBudget;
     if (budgetLimited) steps.push({ type: "budget", label: `Stopped at the ${runCreditBudget.toLocaleString("en-IN")}-credit run budget`, status: "complete" });
+    if (cancelled) steps.push({ type: "cancelled", label: "Stopped by request", status: "complete" });
     const creditAdjustment = creditsUsed - AGENT_RUN_RESERVATION_CREDITS;
     const estimatedCostUsd = estimateAgentCostUsd(selectedModel, inputTokens, outputTokens);
-    const finalText = !madeFileEdits
-      ? "KODO did not save any file changes in this run, so your reserved credits were refunded. Please retry the build."
-      : result.text.trim() || (budgetLimited
-        ? "KODO reached the available credit budget after saving changes. Review the live preview, then add credits or switch to GPT 5.4 Mini to continue."
-        : "KODO completed the run and saved the project changes.");
+    const finalText = cancelled
+      ? (madeFileEdits
+        ? "This run was stopped. Files saved before the stop were kept, and credits were charged only for the completed work."
+        : "This run was stopped before KODO saved any file changes, so your reserved credits were refunded.")
+      : !madeFileEdits
+        ? "KODO did not save any file changes in this run, so your reserved credits were refunded. Please retry the build."
+        : result.text.trim() || (budgetLimited
+          ? "KODO reached the available credit budget after saving changes. Review the live preview, then add credits or switch to GPT 5.4 Mini to continue."
+          : "KODO completed the run and saved the project changes.");
+    const finalStatus = cancelled ? "cancelled" : "complete";
 
     await db.batch([
-      db.prepare("UPDATE generations SET result = ?, steps_json = ?, status = 'complete', input_tokens = ?, output_tokens = ?, credits_used = ?, updated_at = ? WHERE id = ?")
-        .bind(finalText, JSON.stringify(steps), inputTokens, outputTokens, creditsUsed, now(), generationId),
+      db.prepare("UPDATE generations SET result = ?, steps_json = ?, status = ?, input_tokens = ?, output_tokens = ?, credits_used = ?, updated_at = ? WHERE id = ?")
+        .bind(finalText, JSON.stringify(steps), finalStatus, inputTokens, outputTokens, creditsUsed, now(), generationId),
       db.prepare("UPDATE workspaces SET credits = MAX(0, credits - ?) WHERE id = ?").bind(creditAdjustment, workspaceId),
       db.prepare("INSERT INTO usage_events (id, workspace_id, generation_id, kind, units, metadata_json, created_at) VALUES (?, ?, ?, 'agent_credit', ?, ?, ?)")
         .bind(id("use"), workspaceId, generationId, creditsUsed, JSON.stringify({
@@ -331,7 +344,7 @@ Every website must be responsive, accessible, visually polished, and use real co
       httpStatus: 200,
       body: {
         generationId,
-        status: "complete",
+        status: finalStatus,
         result: finalText,
         steps,
         usage: {

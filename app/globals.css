@@ -294,7 +294,7 @@ body,.app-shell{background:#13120a;color:var(--ink)}
 .automation-history-empty{display:flex;align-items:center;gap:6px;color:#646259;font-size:8px}
 
 /* Device-aware live preview and transparent agent progress */
-.thinking-line time{margin-left:auto;color:#646259;font:7px ui-monospace,SFMono-Regular,Menlo,monospace}
+.thinking-line time{margin-left:auto;color:#646259;font:7px ui-monospace,SFMono-Regular,Menlo,monospace}.stop-run-btn{margin-left:8px;height:22px;border:1px solid rgba(201,106,112,.3);background:rgba(201,106,112,.08);color:#d98b90;border-radius:6px;padding:0 8px;display:flex;align-items:center;gap:5px;font-size:8px;font-weight:600}.stop-run-btn:disabled{opacity:.5}
 .thinking-note{margin:0 0 10px!important;padding:7px 8px;border:1px solid rgba(91,141,239,.14);border-radius:7px;background:rgba(91,141,239,.05);color:#77756d!important;font-size:7px!important;line-height:1.45!important}
 .thinking-steps{gap:0!important}
 .thinking-steps span{min-height:27px;position:relative;color:#5f5d55}

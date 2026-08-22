@@ -5,7 +5,7 @@ import Link from "next/link";
 import {
   ArrowUp, Check, ChevronDown, CircleAlert, Code2, Download, ExternalLink, Eye, File, FileCode2,
   Folder, GitBranch, Github, Globe, History, LoaderCircle, MoreHorizontal, Paperclip, Plus,
-  RefreshCw, RotateCcw, Save, Settings2, Sparkles, Terminal, Trash2, X,
+  RefreshCw, RotateCcw, Save, Settings2, Sparkles, Square, Terminal, Trash2, X,
 } from "lucide-react";
 import { renderProjectDocument } from "../../lib/project-files";
 import { AGENT_MODELS, agentModelLabel, resolveAgentModelId, type AgentModelId } from "../../lib/agent-models";
@@ -107,6 +107,8 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
   const [mobilePreviewScale, setMobilePreviewScale] = useState(1);
   const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
   const [runSeconds, setRunSeconds] = useState(0);
+  const [activeGenerationId, setActiveGenerationId] = useState("");
+  const [cancelling, setCancelling] = useState(false);
   const uploadInput = useRef<HTMLInputElement>(null);
   const phonePreviewViewport = useRef<HTMLDivElement>(null);
   const autoRunStarted = useRef(false);
@@ -164,7 +166,10 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
         if (!active) return;
         setData(payload);
         const activeGeneration = payload.generations.find(generation => generation.status === "running");
-        if (activeGeneration) setLiveSteps(parseSteps(activeGeneration.steps_json));
+        if (activeGeneration) {
+          setLiveSteps(parseSteps(activeGeneration.steps_json));
+          setActiveGenerationId(activeGeneration.id);
+        }
       } catch {
         // The main agent request owns error reporting. Activity polling is best effort.
       }
@@ -209,17 +214,31 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
     if (Number(data?.workspace?.credits ?? 20) < 20) { setError("At least 20 credits are required for an agent run. Recharge from Billing."); return; }
     setError(""); setNotice("");
     setMessages(current => [...current, { id: `local-user-${Date.now()}`, role: "user", text: task }]);
-    setPrompt(""); setLiveSteps([]); setRunSeconds(0); setRunning(true);
+    setPrompt(""); setLiveSteps([]); setRunSeconds(0); setActiveGenerationId(""); setCancelling(false); setRunning(true);
     try {
       const response = await fetch("/api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, prompt: task, model: selectedModel }) });
-      const result = await response.json() as { result?: string; error?: string; connectUrl?: string; usage?: { creditsUsed?: number }; steps?: AgentStep[]; model?: string };
+      const result = await response.json() as { result?: string; error?: string; connectUrl?: string; usage?: { creditsUsed?: number }; steps?: AgentStep[]; model?: string; status?: string };
       setLiveSteps(result.steps ?? []);
       setMessages(current => [...current, { id: `local-agent-${Date.now()}`, role: "agent", text: result.result ?? result.error ?? "The agent could not complete this run.", done: response.ok, connectUrl: result.connectUrl, credits: result.usage?.creditsUsed, steps: result.steps, model: result.model ?? selectedModel }]);
       if (!response.ok) setError(result.error ?? "The agent could not complete this run.");
+      else if (result.status === "cancelled") setNotice("Agent run stopped.");
       setDrafts({}); await loadProject(); setPreviewNonce(value => value + 1);
       window.history.replaceState(null, "", `/project/${projectId}`);
     } catch { setError("KODO could not reach the agent service. Your reserved credits were not charged."); }
-    finally { setRunning(false); }
+    finally { setRunning(false); setCancelling(false); setActiveGenerationId(""); }
+  }
+
+  async function cancelRun() {
+    if (!activeGenerationId || cancelling) return;
+    setCancelling(true);
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/generations/${encodeURIComponent(activeGenerationId)}/cancel`, { method: "POST" });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) { setError(result.error ?? "Could not stop this run."); setCancelling(false); }
+    } catch {
+      setError("Could not stop this run.");
+      setCancelling(false);
+    }
   }
 
   async function saveFile() {
@@ -416,7 +435,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
             {messages.map(message => <div className={`message ${message.role}`} key={message.id}><span className="message-role">{message.role === "user" ? "You" : <><Sparkles size={11} /> KODO{message.model ? ` · ${agentModelLabel(message.model)}` : ""}</>}</span><p>{message.text}</p>{message.connectUrl ? <a className="message-connect" href={message.connectUrl}>Open integrations</a> : null}{message.done ? (() => { const madeEdits = message.steps?.some(step => step.type === "edit"); return <div className="change-summary">{madeEdits ? <span><Check size={12} /> Agent run completed{message.credits ? ` · ${message.credits} credits` : ""}</span> : <span><CircleAlert size={12} /> No file changes were made{message.credits ? ` · ${message.credits} credits` : ""}</span>}{message.steps?.slice(-5).map((step, index) => <div key={`${step.label}-${index}`}><FileCode2 size={13} /><b>{step.label}</b><em>{step.status}</em></div>)}<button onClick={() => setView("code")}>Review real files</button></div>; })() : null}</div>)}
             {running ? <div className="message agent running-message">
               <span className="message-role"><Sparkles size={11} /> KODO · {agentModelLabel(selectedModel)}</span>
-              <div className="thinking-line"><i /><span>{currentRunPhase >= 0 ? RUN_PHASES[currentRunPhase]?.label : "Finishing the agent response"}</span><time>{runSeconds}s</time></div>
+              <div className="thinking-line"><i /><span>{currentRunPhase >= 0 ? RUN_PHASES[currentRunPhase]?.label : "Finishing the agent response"}</span><time>{runSeconds}s</time><button type="button" className="stop-run-btn" disabled={!activeGenerationId || cancelling} onClick={() => void cancelRun()}><Square size={11} /> {cancelling ? "Stopping…" : "Stop"}</button></div>
               <p className="thinking-note">Live activity · The preview refreshes as soon as KODO saves real files.</p>
               <div className="thinking-steps">
                 <span className="complete"><Check size={11} /> Understanding your request</span>
