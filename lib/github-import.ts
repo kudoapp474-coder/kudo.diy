@@ -65,7 +65,7 @@ export async function importGitHubRepository(repository: string, requestedBranch
     .filter(entry => entry.type === "blob" && entry.sha && entry.path && Number(entry.size ?? 0) <= MAX_FILE_BYTES)
     .map(entry => ({ ...entry, safePath: importablePath(entry.path ?? "") }))
     .filter(entry => entry.safePath)
-    .sort((left, right) => left.safePath.localeCompare(right.safePath))
+    .sort((left, right) => left.safePath.split("/").length - right.safePath.split("/").length || left.safePath.localeCompare(right.safePath))
     .filter(entry => {
       const size = Number(entry.size ?? 0);
       if (selectedBytes + size > MAX_TOTAL_BYTES) return false;
