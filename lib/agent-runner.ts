@@ -20,6 +20,7 @@ import { nativeSandboxConfigured, runProjectChecks } from "./vercel-sandbox";
 
 const CONFIGURED_DEFAULT_MODEL = isAgentModelId(process.env.KODO_MODEL) ? process.env.KODO_MODEL : DEFAULT_AGENT_MODEL_ID;
 const STALE_AGENT_LOCK_MS = 10 * 60 * 1000;
+const MINIMUM_FILE_WRITE_OUTPUT_TOKENS = 4_096;
 
 export type AgentRunResult = { httpStatus: number; body: Record<string, unknown> };
 
@@ -127,6 +128,7 @@ export async function runKodoAgent(params: {
       .bind(generationId, workspaceId, projectId, userEmail, selectedModel, prompt.slice(0, 12000), timestamp, timestamp).run();
     generationInserted = true;
 
+    const creditBudgetStop = agentCreditStopCondition(selectedModel, runCreditBudget);
     const agent = new ToolLoopAgent({
       model: selectedModel,
       instructions: `You are KODO, a production website coding agent. You must implement the user's request in the project files, not merely describe a design or print code in chat.
@@ -134,9 +136,15 @@ The build lifecycle is enforced: inspect the project, save a concise plan, apply
 The instant preview runtime is a dependency-free static web project. For a new or redesigned experience, implement the complete visual result in index.html, styles.css and script.js. Keep package.json and scripts/build.mjs working. Use compact production code so the complete implementation fits in the file-application step. You may use remote HTTPS image, video and font URLs, but do not add npm dependencies or frameworks unless the user explicitly asks and the static preview still works.
 When applyProjectFiles is requested, send the complete contents of every file required to implement the plan in that single tool call. For full website/app builds, normally include index.html, styles.css and script.js together. Preserve unrelated existing files. Never put prose, markdown fences, or explanations inside file contents.
 Every website must be responsive, accessible, visually polished, and use real copy instead of placeholders. Implement interactions in script.js. Never claim a check passed if the sandbox reports skipped or failed. Keep the final response concise and list the files changed.`,
-      stopWhen: [isStepCount(12), agentCreditStopCondition(selectedModel, runCreditBudget)],
+      stopWhen: [
+        isStepCount(12),
+        ({ steps: completedSteps }) => lastStepIndex(steps, "edit") >= 0 && creditBudgetStop({ steps: completedSteps }),
+      ],
       prepareStep: ({ steps: completedSteps }) => {
-        const maxOutputTokens = agentStepOutputTokenLimit(selectedModel, runCreditBudget, completedSteps);
+        const budgetedOutputTokens = agentStepOutputTokenLimit(selectedModel, runCreditBudget, completedSteps);
+        const maxOutputTokens = lastStepIndex(steps, "edit") < 0
+          ? Math.max(MINIMUM_FILE_WRITE_OUTPUT_TOKENS, budgetedOutputTokens)
+          : budgetedOutputTokens;
         if (lastStepIndex(steps, "read") < 0) {
           return { maxOutputTokens, toolChoice: { type: "tool", toolName: "inspectProject" } };
         }
@@ -242,6 +250,16 @@ Every website must be responsive, accessible, visually polished, and use real co
     const outputTokens = Number(result.totalUsage.outputTokens ?? 0);
     const rawCreditsUsed = calculateAgentCredits(selectedModel, inputTokens, outputTokens);
     const madeFileEdits = steps.some(step => step.type === "edit");
+    console.info("[kodo-agent] run completed", {
+      generationId,
+      projectId,
+      selectedModel,
+      runCreditBudget,
+      inputTokens,
+      outputTokens,
+      madeFileEdits,
+      stepTypes: steps.map(step => `${step.type}:${step.status}`),
+    });
     const creditsUsed = madeFileEdits ? Math.min(rawCreditsUsed, runCreditBudget) : 0;
     const budgetLimited = rawCreditsUsed >= runCreditBudget;
     if (budgetLimited) steps.push({ type: "budget", label: `Stopped at the ${runCreditBudget.toLocaleString("en-IN")}-credit run budget`, status: "complete" });
@@ -310,6 +328,7 @@ Every website must be responsive, accessible, visually polished, and use real co
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Agent failed";
+    console.error("[kodo-agent] run failed", { generationId, projectId, selectedModel, message, stepTypes: steps.map(step => `${step.type}:${step.status}`) });
     const upstreamRateLimited = isUpstreamRateLimit(error);
     if (generationInserted) {
       await db.prepare("UPDATE generations SET status = 'error', error = ?, steps_json = ?, updated_at = ? WHERE id = ?")
