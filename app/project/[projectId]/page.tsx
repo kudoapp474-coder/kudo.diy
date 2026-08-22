@@ -1,6 +1,9 @@
+import { redirect } from "next/navigation";
 import { ProjectWorkspace } from "../../components/project-workspace";
 
-export default async function ProjectPage({ params }: { params: Promise<{ projectId: string }> }) {
+export default async function ProjectPage({ params, searchParams }: { params: Promise<{ projectId: string }>; searchParams: Promise<{ task?: string; autorun?: string }> }) {
   const { projectId } = await params;
-  return <ProjectWorkspace projectId={projectId} />;
+  if (projectId === "new") redirect("/workspace#build");
+  const query = await searchParams;
+  return <ProjectWorkspace projectId={projectId} initialTask={query.task?.slice(0, 12000) ?? ""} autoRun={query.autorun === "1"} />;
 }

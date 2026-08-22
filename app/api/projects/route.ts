@@ -1,4 +1,5 @@
 import { all, id, now } from "../../../lib/db";
+import { starterProjectFiles } from "../../../lib/project-files";
 import { requireApiUser, unauthorized } from "../../../lib/server-auth";
 
 export async function GET() {
@@ -20,12 +21,19 @@ export async function POST(request: Request) {
       upgradeUrl: "/pricing",
     }, { status: 403 });
   }
-  const body = await request.json() as { name?: string; description?: string; repository?: string };
+  const body = await request.json() as { name?: string; description?: string; repository?: string; prompt?: string };
   const name = body.name?.trim();
   if (!name) return Response.json({ error: "Project name is required." }, { status: 400 });
   const projectId = id("prj");
   const timestamp = now();
   await auth.db.prepare("INSERT INTO projects (id, workspace_id, name, description, repository, branch, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'main', 'draft', ?, ?)")
     .bind(projectId, auth.workspaceId, name.slice(0, 100), body.description?.slice(0, 500) ?? "", body.repository?.slice(0, 200) ?? null, timestamp, timestamp).run();
-  return Response.json({ project: { id: projectId, name, status: "draft", created_at: timestamp } }, { status: 201 });
+  const files = starterProjectFiles(name);
+  await auth.db.batch(files.map(file => auth.db.prepare(
+    "INSERT INTO project_files (id, project_id, path, content, language, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+  ).bind(id("file"), projectId, file.path, file.content, file.language ?? "text", timestamp)));
+  return Response.json({
+    project: { id: projectId, name, status: "draft", created_at: timestamp },
+    initialTask: body.prompt?.trim().slice(0, 12000) || null,
+  }, { status: 201 });
 }

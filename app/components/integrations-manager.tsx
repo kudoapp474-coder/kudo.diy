@@ -13,6 +13,14 @@ const fallbackItems: Integration[] = [
   { id: "dodo", name: "Dodo Payments", configured: false, status: "unknown" },
 ];
 
+async function requestIntegrations() {
+  const response = await fetch("/api/integrations/status", { cache: "no-store" });
+  if (!response.ok) throw new Error(`Status request failed (${response.status})`);
+  const data = await response.json() as { integrations?: Integration[] };
+  if (!Array.isArray(data.integrations)) throw new Error("Invalid integration status response");
+  return data.integrations;
+}
+
 export function IntegrationsManager() {
   const [items, setItems] = useState<Integration[]>(fallbackItems);
   const [loading, setLoading] = useState(true);
@@ -22,11 +30,7 @@ export function IntegrationsManager() {
     setLoading(true);
     setError("");
     try {
-      const response = await fetch("/api/integrations/status", { cache: "no-store" });
-      if (!response.ok) throw new Error(`Status request failed (${response.status})`);
-      const data = await response.json() as { integrations?: Integration[] };
-      if (!Array.isArray(data.integrations)) throw new Error("Invalid integration status response");
-      setItems(data.integrations);
+      setItems(await requestIntegrations());
     } catch {
       setItems(fallbackItems);
       setError("Live status is unavailable. You can still connect GitHub below.");
@@ -35,7 +39,18 @@ export function IntegrationsManager() {
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    let active = true;
+    requestIntegrations()
+      .then(integrations => { if (active) setItems(integrations); })
+      .catch(() => {
+        if (!active) return;
+        setItems(fallbackItems);
+        setError("Live status is unavailable. You can still connect GitHub below.");
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
 
   return <div className="integration-manager"><div className="integration-summary"><ShieldCheck size={17}/><span><b>Secrets stay server-side</b><small>{error || "Keys are never exposed to the browser or saved in project files."}</small></span><button onClick={load}><RefreshCw size={14}/>{loading?"Checking...":"Refresh"}</button></div><div className="integration-grid">{items.map(item=>{const Icon=icons[item.id as keyof typeof icons]??KeyRound;const connected=item.status==="connected";const operational=item.id==="github"?connected:item.configured;const label=item.id==="github"&&item.configured&&!connected?"Credentials ready":operational?"Ready":"Setup required";return <article key={item.id}><header><span><Icon size={18}/></span><em className={operational||item.configured?"ready":"required"}>{operational?<><Check size={11}/> {label}</>:label}</em></header><h2>{item.name}</h2><p>{item.id==="ai"?`Production coding model · ${item.model??"managed by AI Gateway"}`:item.id==="github"?"Repositories, branches, commits and pull requests":item.id==="sandbox"?"Isolated builds and tests authenticated by Vercel OIDC":"Hosted subscription checkout, renewals and invoices"}</p>{item.account&&<small>{item.account}</small>}{item.id==="github"?<a href="/api/github/connect">{connected?"Reconnect":"Connect GitHub"}</a>:<button disabled={item.configured}>{item.configured?"Connected":"Admin key required"}</button>}<footer>{item.id==="ai"?"AI_GATEWAY_API_KEY":item.id==="github"?"GITHUB_APP_ID · PRIVATE_KEY":item.id==="sandbox"?"VERCEL_OIDC_TOKEN · @vercel/sandbox":"DODO_PAYMENTS_API_KEY · PRODUCT_ID · WEBHOOK_KEY"}</footer></article>})}</div><section className="integration-flow"><h2>Production flow</h2>{[["1","User authenticates with ChatGPT"],["2","KODO saves the project in the workspace database"],["3","AI plans and edits versioned project files"],["4","Sandbox builds and tests the result"],["5","GitHub and publishing actions require approval"],["6","Dodo renewals refill workspace credits"]].map(([step,label])=><div key={step}><span>{step}</span><p>{label}</p></div>)}</section></div>
 }
