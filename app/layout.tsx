@@ -19,9 +19,21 @@ export const metadata: Metadata = {
   icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
 };
 
+function clerkRedirectOrigins() {
+  const vercelOrigins = [process.env.VERCEL_BRANCH_URL, process.env.VERCEL_URL]
+    .filter((url): url is string => Boolean(url))
+    .map((url) => `https://${url}`);
+
+  return Array.from(new Set([
+    "https://kodo.diy",
+    "https://www.kodo.diy",
+    ...vercelOrigins,
+  ]));
+}
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const document = <html lang="en"><body>{children}</body></html>;
   return process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-    ? <ClerkProvider>{document}</ClerkProvider>
+    ? <ClerkProvider allowedRedirectOrigins={clerkRedirectOrigins()}>{document}</ClerkProvider>
     : document;
 }
