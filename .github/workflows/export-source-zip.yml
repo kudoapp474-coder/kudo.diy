@@ -1,0 +1,28 @@
+name: Export main source zip
+
+on:
+  push:
+    branches:
+      - export/main-source-zip
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - name: Create exact tracked-source ZIP
+        run: git archive --format=zip --output=KODO-DIY-main.zip HEAD
+      - name: Upload source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: kodo-main-source
+          path: KODO-DIY-main.zip
+          compression-level: 0
+          if-no-files-found: error
