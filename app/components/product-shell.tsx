@@ -10,7 +10,6 @@ import {
   LayoutGrid,
   Menu,
   Plus,
-  Search,
   ShieldCheck,
   Settings,
   Sparkles,
@@ -22,6 +21,7 @@ import { isKodoAdmin } from "../../lib/admin-auth";
 import { requireApiUser } from "../../lib/server-auth";
 import { AccountMenu } from "./account-menu";
 import { BrandLogo } from "./brand-logo";
+import { GlobalSearch } from "./global-search";
 
 const navigation = [
   { href: "/workspace", label: "Home", icon: Home },
@@ -66,7 +66,7 @@ export async function ProductShell({ active, title, context, children, actions }
       <header className="product-topbar">
         <Link className="product-logo" href="/"><BrandLogo size="compact" /></Link>
         <div className="top-project"><span className="mini-avatar">{initial}</span><b>{workspaceName}</b><ChevronDown size={13} /></div>
-        <button className="global-search"><Search size={15} /><span>Search projects, agents, and files</span><kbd>⌘ K</kbd></button>
+        <GlobalSearch />
         <div className="product-top-actions"><button aria-label="Notifications"><Bell size={17} /><i /></button><a href="/billing"><Zap size={14} /> {credits.toLocaleString("en-IN")} credits</a>{clerkEnabled ? <AccountMenu displayName={auth.user.displayName} email={auth.user.email} initial={initial} /> : <span className="user-avatar">{initial}</span>}</div>
         <details className="product-mobile-menu"><summary aria-label="Open navigation"><Menu size={19} /></summary><div><div className="mobile-menu-title"><BrandLogo size="compact" /><X size={17} /></div>{navigationItems.map((item) => <a className={active === item.label.toLowerCase() ? "active" : ""} href={item.href} key={item.href}><item.icon size={16} />{item.label}</a>)}<a href="/settings"><Settings size={16} />Settings</a></div></details>
       </header>
