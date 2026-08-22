@@ -20,13 +20,15 @@ export async function runAutomation(params: {
 
   const result = await runKodoAgent({ db, workspaceId, userEmail, projectId, prompt });
   const generationId = typeof result.body.generationId === "string" ? result.body.generationId : null;
+  const cancelled = result.body.status === "cancelled";
   const success = result.httpStatus === 200 && result.body.status === "complete";
-  const errorMessage = !success ? (typeof result.body.error === "string" ? result.body.error.slice(0, 600) : "Automation run failed.") : null;
+  const status = cancelled ? "cancelled" : success ? "complete" : "error";
+  const errorMessage = !success && !cancelled ? (typeof result.body.error === "string" ? result.body.error.slice(0, 600) : "Automation run failed.") : null;
   const completedAt = now();
 
   await db.batch([
     db.prepare("UPDATE automation_runs SET generation_id = ?, status = ?, error = ?, updated_at = ? WHERE id = ?")
-      .bind(generationId, success ? "complete" : "error", errorMessage, completedAt, runId),
+      .bind(generationId, status, errorMessage, completedAt, runId),
     db.prepare("UPDATE automations SET last_run_at = ? WHERE id = ?").bind(completedAt, automationId),
   ]);
 

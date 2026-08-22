@@ -1,9 +1,8 @@
-import { normalizePermissions } from "../../../lib/permissions";
+import { loadWorkspacePermissions } from "../../../lib/permissions";
 import { requireApiUser, unauthorized } from "../../../lib/server-auth";
 import { canManageMembers } from "../../../lib/team";
 
 type WorkspaceRow = { name: string; slug: string; plan: string; owner_email: string };
-type SettingsRow = { permissions_json: string };
 
 function normalizeSlug(raw: string) {
   return raw.trim().toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/-{2,}/g, "-").replace(/^-|-$/g, "");
@@ -15,16 +14,12 @@ export async function GET() {
 
   const workspace = await auth.db.prepare("SELECT name, slug, plan, owner_email FROM workspaces WHERE id = ?").bind(auth.workspaceId).first<WorkspaceRow>();
   if (!workspace) return Response.json({ error: "Workspace not found." }, { status: 404 });
-  const settingsRow = await auth.db.prepare("SELECT permissions_json FROM workspace_settings WHERE workspace_id = ?").bind(auth.workspaceId).first<SettingsRow>();
-
-  let parsed: unknown = {};
-  try { parsed = settingsRow ? JSON.parse(settingsRow.permissions_json) : {}; } catch { parsed = {}; }
 
   return Response.json({
     workspace,
     member: { email: auth.user.email, name: auth.user.displayName },
     role: auth.role,
-    permissions: normalizePermissions(parsed),
+    permissions: await loadWorkspacePermissions(auth.db, auth.workspaceId),
   });
 }
 

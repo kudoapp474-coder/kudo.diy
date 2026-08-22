@@ -26,6 +26,7 @@ function usageLabel(row: UsageRow) {
   const kind = row.kind;
   if (kind === "subscription_credit") return "Pro activation credits";
   if (kind === "subscription_renewal") return "Pro renewal credits";
+  if (kind === "credit_topup") return "Credit top-up";
   if (kind === "admin_credit_adjustment") return "Support credit adjustment";
   return "KODO agent run";
 }
@@ -53,7 +54,7 @@ export async function BillingUsage() {
         {recent.map((row, index) => {
           const credits = eventCredits(row);
           const isNeutral = row.kind === "subscription_status";
-          const isCredit = row.kind === "subscription_credit" || row.kind === "subscription_renewal" || (row.kind === "admin_credit_adjustment" && credits >= 0);
+          const isCredit = row.kind === "subscription_credit" || row.kind === "subscription_renewal" || row.kind === "credit_topup" || (row.kind === "admin_credit_adjustment" && credits >= 0);
           return <div className="usage-history-row" key={`${row.generation_id ?? row.kind}-${row.created_at}-${index}`}><span><b>{usageLabel(row)}</b><small>{row.generation_id ?? "Dodo Payments"}</small></span><time>{new Date(row.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}</time><em className={isNeutral ? "neutral" : isCredit ? "credit" : "debit"}>{isNeutral ? "—" : `${isCredit ? "+" : "−"}${Math.abs(credits).toLocaleString("en-IN")}`}</em></div>;
         })}
       </div> : <div className="usage-empty"><b>No credit activity yet</b><span>Your completed agent runs and subscription refills will appear here.</span></div>}

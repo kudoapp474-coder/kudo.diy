@@ -13,8 +13,8 @@ type TeamWorkspace = { id: string; name: string; slug: string; plan: string; rol
 const PERMISSION_ROWS: Array<{ key: keyof Permissions; label: string; hint: string }> = [
   { key: "runTests", label: "Run tests and builds", hint: "Let KODO run the project's checks while it works." },
   { key: "createCommits", label: "Create branches and commits", hint: "Let KODO write commits directly on working branches." },
-  { key: "openPullRequests", label: "Open pull requests", hint: "Let KODO open PRs on the linked GitHub repository." },
-  { key: "productionDeploys", label: "Production deployments", hint: "Let KODO deploy straight to production without asking." },
+  { key: "openPullRequests", label: "Open pull requests", hint: "Reserved for the upcoming GitHub PR workflow — KODO doesn't open PRs yet." },
+  { key: "productionDeploys", label: "Production deployments", hint: "Reserved for automatic deploys — publishing is always a manual action today." },
 ];
 
 function canManage(role: Role | null) {
