@@ -35,7 +35,7 @@ type ProjectData = {
   workspace: { plan: string; credits: number } | null;
 };
 type AgentStep = { type: string; label: string; status: string };
-type ChatMessage = { id: string; role: "user" | "agent"; text: string; done?: boolean; connectUrl?: string; credits?: number; steps?: AgentStep[]; model?: string };
+type ChatMessage = { id: string; role: "user" | "agent"; text: string; done?: boolean; connectUrl?: string; credits?: number; steps?: AgentStep[]; model?: string; status?: string; generationId?: string };
 type CheckResult = { status?: string; phase?: string; command?: string; stdout?: string; stderr?: string; error?: string };
 type PreviewKind = "desktop" | "mobile";
 
@@ -58,7 +58,7 @@ function messagesFromGenerations(generations: Generation[]): ChatMessage[] {
   if (!generations.length) return [{ id: "welcome", role: "agent", text: "Your real project files are ready. Describe the website and KODO will edit them, run checks and save a version." }];
   return generations.toReversed().flatMap(generation => [
     { id: `${generation.id}-user`, role: "user" as const, text: generation.prompt },
-    { id: `${generation.id}-agent`, role: "agent" as const, text: generation.result || generation.error || "The agent run did not return a summary.", done: generation.status === "complete", credits: generation.credits_used, steps: parseSteps(generation.steps_json), model: generation.model },
+    { id: `${generation.id}-agent`, role: "agent" as const, text: generation.result || generation.error || "The agent run did not return a summary.", done: generation.status === "complete", credits: generation.credits_used, steps: parseSteps(generation.steps_json), model: generation.model, status: generation.status, generationId: generation.id },
   ]);
 }
 
@@ -109,6 +109,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
   const [runSeconds, setRunSeconds] = useState(0);
   const [activeGenerationId, setActiveGenerationId] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  const [resumingId, setResumingId] = useState("");
   const uploadInput = useRef<HTMLInputElement>(null);
   const phonePreviewViewport = useRef<HTMLDivElement>(null);
   const autoRunStarted = useRef(false);
@@ -208,6 +209,16 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
     return () => observer.disconnect();
   }, [view, previewKind]);
 
+  type AgentResponseBody = { result?: string; error?: string; connectUrl?: string; usage?: { creditsUsed?: number }; steps?: AgentStep[]; model?: string; status?: string; generationId?: string };
+
+  async function finishAgentResponse(response: Response, result: AgentResponseBody) {
+    setLiveSteps(result.steps ?? []);
+    setMessages(current => [...current, { id: `local-agent-${Date.now()}`, role: "agent", text: result.result ?? result.error ?? "The agent could not complete this run.", done: response.ok, connectUrl: result.connectUrl, credits: result.usage?.creditsUsed, steps: result.steps, model: result.model ?? selectedModel, status: result.status, generationId: result.generationId }]);
+    if (!response.ok) setError(result.error ?? "The agent could not complete this run.");
+    else if (result.status === "cancelled") setNotice("Agent run stopped.");
+    setDrafts({}); await loadProject(); setPreviewNonce(value => value + 1);
+  }
+
   async function runAgent(override?: string) {
     const task = (override ?? prompt).trim();
     if (!task || running) return;
@@ -217,15 +228,25 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
     setPrompt(""); setLiveSteps([]); setRunSeconds(0); setActiveGenerationId(""); setCancelling(false); setRunning(true);
     try {
       const response = await fetch("/api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, prompt: task, model: selectedModel }) });
-      const result = await response.json() as { result?: string; error?: string; connectUrl?: string; usage?: { creditsUsed?: number }; steps?: AgentStep[]; model?: string; status?: string };
-      setLiveSteps(result.steps ?? []);
-      setMessages(current => [...current, { id: `local-agent-${Date.now()}`, role: "agent", text: result.result ?? result.error ?? "The agent could not complete this run.", done: response.ok, connectUrl: result.connectUrl, credits: result.usage?.creditsUsed, steps: result.steps, model: result.model ?? selectedModel }]);
-      if (!response.ok) setError(result.error ?? "The agent could not complete this run.");
-      else if (result.status === "cancelled") setNotice("Agent run stopped.");
-      setDrafts({}); await loadProject(); setPreviewNonce(value => value + 1);
+      const result = await response.json() as AgentResponseBody;
+      await finishAgentResponse(response, result);
       window.history.replaceState(null, "", `/project/${projectId}`);
     } catch { setError("KODO could not reach the agent service. Your reserved credits were not charged."); }
     finally { setRunning(false); setCancelling(false); setActiveGenerationId(""); }
+  }
+
+  async function resumeRun(generationId: string) {
+    if (running) return;
+    setError(""); setNotice("");
+    setResumingId(generationId);
+    setMessages(current => [...current, { id: `local-user-${Date.now()}`, role: "user", text: "Resume from the last checkpoint" }]);
+    setLiveSteps([]); setRunSeconds(0); setActiveGenerationId(""); setCancelling(false); setRunning(true);
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/generations/${encodeURIComponent(generationId)}/resume`, { method: "POST" });
+      const result = await response.json() as AgentResponseBody;
+      await finishAgentResponse(response, result);
+    } catch { setError("KODO could not reach the agent service. Your reserved credits were not charged."); }
+    finally { setRunning(false); setCancelling(false); setActiveGenerationId(""); setResumingId(""); }
   }
 
   async function cancelRun() {
@@ -432,7 +453,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
           <div className="agent-panel-head"><div><span className="online-dot" /><b>KODO Agent</b></div><button aria-label="Agent options"><MoreHorizontal size={17} /></button></div>
           <div className="conversation">
             <div className="agent-intro"><span><Sparkles size={16} /></span><h1>Build with KODO</h1><p>Ask for a complete website or a precise edit. Every real file and version stays in this project.</p></div>
-            {messages.map(message => <div className={`message ${message.role}`} key={message.id}><span className="message-role">{message.role === "user" ? "You" : <><Sparkles size={11} /> KODO{message.model ? ` · ${agentModelLabel(message.model)}` : ""}</>}</span><p>{message.text}</p>{message.connectUrl ? <a className="message-connect" href={message.connectUrl}>Open integrations</a> : null}{message.done ? (() => { const madeEdits = message.steps?.some(step => step.type === "edit"); return <div className="change-summary">{madeEdits ? <span><Check size={12} /> Agent run completed{message.credits ? ` · ${message.credits} credits` : ""}</span> : <span><CircleAlert size={12} /> No file changes were made{message.credits ? ` · ${message.credits} credits` : ""}</span>}{message.steps?.slice(-5).map((step, index) => <div key={`${step.label}-${index}`}><FileCode2 size={13} /><b>{step.label}</b><em>{step.status}</em></div>)}<button onClick={() => setView("code")}>Review real files</button></div>; })() : null}</div>)}
+            {messages.map(message => <div className={`message ${message.role}`} key={message.id}><span className="message-role">{message.role === "user" ? "You" : <><Sparkles size={11} /> KODO{message.model ? ` · ${agentModelLabel(message.model)}` : ""}</>}</span><p>{message.text}</p>{message.connectUrl ? <a className="message-connect" href={message.connectUrl}>Open integrations</a> : null}{message.done ? (() => { const madeEdits = message.steps?.some(step => step.type === "edit"); return <div className="change-summary">{madeEdits ? <span><Check size={12} /> Agent run completed{message.credits ? ` · ${message.credits} credits` : ""}</span> : <span><CircleAlert size={12} /> No file changes were made{message.credits ? ` · ${message.credits} credits` : ""}</span>}{message.steps?.slice(-5).map((step, index) => <div key={`${step.label}-${index}`}><FileCode2 size={13} /><b>{step.label}</b><em>{step.status}</em></div>)}<button onClick={() => setView("code")}>Review real files</button></div>; })() : null}{(message.status === "error" || message.status === "cancelled") && message.generationId ? <div className="change-summary"><span><CircleAlert size={12} /> {message.status === "cancelled" ? "Run stopped" : "Run failed"}{message.credits ? ` · ${message.credits} credits` : ""}</span><button disabled={running} onClick={() => void resumeRun(message.generationId!)}>{resumingId === message.generationId ? "Resuming…" : "Resume from checkpoint"}</button></div> : null}</div>)}
             {running ? <div className="message agent running-message">
               <span className="message-role"><Sparkles size={11} /> KODO · {agentModelLabel(selectedModel)}</span>
               <div className="thinking-line"><i /><span>{currentRunPhase >= 0 ? RUN_PHASES[currentRunPhase]?.label : "Finishing the agent response"}</span><time>{runSeconds}s</time><button type="button" className="stop-run-btn" disabled={!activeGenerationId || cancelling} onClick={() => void cancelRun()}><Square size={11} /> {cancelling ? "Stopping…" : "Stop"}</button></div>
