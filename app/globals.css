@@ -252,3 +252,15 @@ body,.app-shell{background:#13120a;color:var(--ink)}
 .composer-repo-menu>p,.composer-repo-list>p{min-height:44px;margin:0;padding:0 9px;display:flex;align-items:center;gap:7px;color:#77756d;font-size:8px}.composer-repo-menu>p svg{animation:spin .9s linear infinite}
 .composer-repo-menu>a{height:38px;margin:5px;border:1px solid var(--line);border-radius:8px;color:#8facf4;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:7px;font-size:8px}.composer-repo-list{max-height:220px;overflow:auto;border-top:1px solid var(--line)}
 @media(max-width:680px){.composer-repo-menu{position:fixed;left:12px;right:12px;bottom:76px;width:auto;max-height:55vh}.workspace-composer .composer-repo{width:34px;padding:0}.workspace-composer .composer-repo>span{display:none}}
+
+
+/* Verified AI model selectors */
+.composer-model,.model-select{display:flex;align-items:center;gap:6px;color:#aaa89f}
+.workspace-composer .composer-model{height:33px;border:1px solid var(--line);background:#24231c;border-radius:8px;max-width:180px}
+.composer-model select,.model-select select{min-width:0;border:0;outline:0;appearance:none;background:transparent;color:inherit;font:inherit;color-scheme:dark;cursor:pointer;text-overflow:ellipsis}
+.composer-model select{max-width:132px;font-size:9px}
+.model-select{height:29px;max-width:190px;padding:0 7px;border-radius:7px;font-size:8px;cursor:pointer}
+.model-select:hover,.model-select:focus-within{background:#24231c;color:#efede4}
+.model-select select{max-width:145px}
+.composer-model svg:last-child,.model-select svg:last-child{flex:none;pointer-events:none}
+@media(max-width:700px){.workspace-composer .composer-model{max-width:142px}.composer-model select{max-width:96px}.model-select{max-width:145px}.model-select select{max-width:102px}}
