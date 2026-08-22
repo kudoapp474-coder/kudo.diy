@@ -1,5 +1,5 @@
-import { all, ensureDatabase, now } from "../../../../lib/db";
-import { runKodoAgent } from "../../../../lib/agent-runner";
+import { all, ensureDatabase } from "../../../../lib/db";
+import { runAutomation } from "../../../../lib/automation-runner";
 
 type ScheduledAutomation = { id: string; workspace_id: string; project_id: string | null; prompt: string; owner_email: string };
 
@@ -25,14 +25,15 @@ export async function GET(request: Request) {
   let ran = 0;
   for (const automation of due) {
     if (!automation.project_id) continue;
-    await runKodoAgent({
+    await runAutomation({
       db,
+      automationId: automation.id,
       workspaceId: automation.workspace_id,
       userEmail: automation.owner_email,
       projectId: automation.project_id,
       prompt: automation.prompt,
+      trigger: "schedule",
     });
-    await db.prepare("UPDATE automations SET last_run_at = ? WHERE id = ?").bind(now(), automation.id).run();
     ran += 1;
   }
 
