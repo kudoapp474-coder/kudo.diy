@@ -101,3 +101,28 @@ test("wires live GitHub repository connections and atomic project sync", async (
   assert.match(database, /CREATE TABLE IF NOT EXISTS github_syncs/);
   assert.doesNotMatch(views, /kodo\/web|kodo\/dashboard/);
 });
+
+test("wires safe version restores and production rollback", async () => {
+  const [builder, versionsApi, rollbackApi, projectApi, versionSafety] = await Promise.all([
+    readFile(new URL("../app/components/project-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/versions/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/projects/[projectId]/rollback/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/projects/[projectId]/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/project-versions.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(builder, /Versions & rollback/);
+  assert.match(builder, /Rollback live/);
+  assert.match(builder, /\/rollback`/);
+  assert.match(builder, /Safety checkpoint created/);
+  assert.match(versionsApi, /Before restore:/);
+  assert.match(versionsApi, /safetyVersionId/);
+  assert.match(rollbackApi, /runProjectChecks\(snapshot, "npm run build"\)/);
+  assert.match(rollbackApi, /deployStaticProjectToVercel\(project\.name, projectId, snapshot, "production"\)/);
+  assert.match(rollbackApi, /Before production rollback:/);
+  assert.match(rollbackApi, /production_url = \?/);
+  assert.match(projectApi, /file_count:/);
+  assert.match(projectApi, /deployment_environment:/);
+  assert.match(versionSafety, /MAX_VERSION_FILES/);
+  assert.match(versionSafety, /paths\.has\(path\)/);
+});
