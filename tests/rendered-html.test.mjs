@@ -101,3 +101,60 @@ test("wires live GitHub repository connections and atomic project sync", async (
   assert.match(database, /CREATE TABLE IF NOT EXISTS github_syncs/);
   assert.doesNotMatch(views, /kodo\/web|kodo\/dashboard/);
 });
+
+test("wires safe version restores and production rollback", async () => {
+  const [builder, versionsApi, rollbackApi, projectApi, versionSafety] = await Promise.all([
+    readFile(new URL("../app/components/project-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/versions/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/projects/[projectId]/rollback/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/projects/[projectId]/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/project-versions.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(builder, /Versions & rollback/);
+  assert.match(builder, /Rollback live/);
+  assert.match(builder, /\/rollback`/);
+  assert.match(builder, /Safety checkpoint created/);
+  assert.match(versionsApi, /Before restore:/);
+  assert.match(versionsApi, /safetyVersionId/);
+  assert.match(rollbackApi, /runProjectChecks\(snapshot, "npm run build"\)/);
+  assert.match(rollbackApi, /deployStaticProjectToVercel\(project\.name, projectId, snapshot, "production"\)/);
+  assert.match(rollbackApi, /Before production rollback:/);
+  assert.match(rollbackApi, /production_url = \?/);
+  assert.match(projectApi, /file_count:/);
+  assert.match(projectApi, /deployment_environment:/);
+  assert.match(versionSafety, /MAX_VERSION_FILES/);
+  assert.match(versionSafety, /paths\.has\(path\)/);
+});
+
+test("wires complete secure Manage Publishing flows", async () => {
+  const [builder, manager, publishingApi, secrets, vercelConfig, database] = await Promise.all([
+    readFile(new URL("../app/components/project-workspace.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/publishing-manager.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/projects/[projectId]/publishing/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/project-secrets.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/vercel-project-config.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/db.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(builder, /PublishingManager/);
+  assert.match(manager, /Overview/);
+  assert.match(manager, /Custom domain/);
+  assert.match(manager, /Resources/);
+  assert.match(manager, /Database/);
+  assert.match(manager, /Secrets/);
+  assert.match(manager, /never returned to the browser/);
+  assert.match(publishingApi, /maskedValue: "••••••••••••"/);
+  assert.match(publishingApi, /SELECT id, key_name, targets_json, git_branch, sync_status, created_at, updated_at FROM project_secrets/);
+  assert.doesNotMatch(publishingApi, /decrypted|plaintextValue|maskedValue:\s*value/);
+  assert.match(publishingApi, /NEXT_PUBLIC_ variables are visible in the browser/);
+  assert.match(publishingApi, /project_audit_events/);
+  assert.match(secrets, /AES-GCM/);
+  assert.match(secrets, /Reserved VERCEL_ and KODO_ keys/);
+  assert.match(vercelConfig, /\/v10\/projects\/\$\{encodeURIComponent\(projectName\)\}\/domains/);
+  assert.match(vercelConfig, /upsert=true/);
+  assert.match(vercelConfig, /type: "encrypted"/);
+  assert.match(database, /CREATE TABLE IF NOT EXISTS project_secrets/);
+  assert.match(database, /CREATE TABLE IF NOT EXISTS project_domains/);
+  assert.match(database, /CREATE TABLE IF NOT EXISTS project_databases/);
+});

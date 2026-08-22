@@ -4,15 +4,26 @@ import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowUp, Check, ChevronDown, CircleAlert, Code2, Download, ExternalLink, Eye, File, FileCode2,
-  Folder, GitBranch, Github, Globe, History, LoaderCircle, MoreHorizontal, Paperclip, Play, Plus,
+  Folder, GitBranch, Github, Globe, History, LoaderCircle, MoreHorizontal, Paperclip, Plus,
   RefreshCw, RotateCcw, Save, Settings2, Sparkles, Terminal, Trash2, X,
 } from "lucide-react";
 import { renderProjectDocument } from "../../lib/project-files";
 import { BrandLogo } from "./brand-logo";
+import { PublishingManager } from "./publishing-manager";
 
 type ProjectFile = { id: string; path: string; content: string; language: string; updated_at: string };
 type Generation = { id: string; prompt: string; result: string | null; status: string; model: string; credits_used: number; error: string | null; steps_json: string; created_at: string };
-type Version = { id: string; label: string; generation_id: string | null; created_at: string };
+type Version = {
+  id: string;
+  label: string;
+  generation_id: string | null;
+  created_at: string;
+  file_count: number;
+  deployment_id: string | null;
+  deployment_environment: string | null;
+  deployment_status: string | null;
+  deployment_url: string | null;
+};
 type Deployment = { id: string; version_id: string; environment: string; status: string; url: string | null; created_at: string };
 type GitHubSync = { id: string; repository: string; branch: string; commit_sha: string | null; status: string; url: string | null; error: string | null; created_at: string };
 type GitHubRepository = { name: string; branch: string; private: boolean };
@@ -50,6 +61,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
   const [loading, setLoading] = useState(true);
   const [showFiles, setShowFiles] = useState(true);
   const [showVersions, setShowVersions] = useState(false);
+  const [versionBusy, setVersionBusy] = useState<string | null>(null);
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [githubOpen, setGithubOpen] = useState(false);
@@ -121,7 +133,6 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
   const selectedFile = data?.files.find(file => file.path === selectedPath) ?? null;
   const editorValue = drafts[selectedPath] ?? selectedFile?.content ?? "";
   const dirty = Boolean(selectedFile && editorValue !== selectedFile.content);
-  const latestDeployment = data?.deployments[0] ?? null;
   const latestGitHubSync = data?.githubSyncs?.[0] ?? null;
   const latestUrl = data?.deployments.find(deployment => deployment.status === "ready" && deployment.url)?.url || data?.project.production_url || data?.project.preview_url;
 
@@ -277,16 +288,45 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
   }
 
   async function createCheckpoint() {
-    const response = await fetch("/api/versions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, label: "Manual checkpoint" }) });
-    const result = await response.json() as { error?: string };
-    if (!response.ok) setError(result.error ?? "Could not create a checkpoint."); else { setNotice("Manual checkpoint created."); await loadProject(); }
+    const label = window.prompt("Checkpoint name", "Manual checkpoint")?.trim();
+    if (!label || versionBusy) return;
+    setVersionBusy("checkpoint"); setError("");
+    try {
+      const response = await fetch("/api/versions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, label }) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) setError(result.error ?? "Could not create a checkpoint."); else { setNotice(`Checkpoint “${label}” created.`); await loadProject(); }
+    } catch { setError("KODO could not reach version history. Try again."); }
+    finally { setVersionBusy(null); }
   }
 
   async function restoreVersion(version: Version) {
-    if (!window.confirm(`Restore “${version.label}”? KODO will save the current files first.`)) return;
-    const response = await fetch("/api/versions", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, versionId: version.id }) });
-    const result = await response.json() as { error?: string };
-    if (!response.ok) setError(result.error ?? "Could not restore this version."); else { setDrafts({}); setNotice(`Restored ${version.label}.`); await loadProject(); setPreviewNonce(value => value + 1); setShowVersions(false); }
+    if (versionBusy || !window.confirm(`Restore “${version.label}” (${version.file_count} files)? KODO will save the current files first. Any unsaved editor changes will be discarded.`)) return;
+    setVersionBusy(version.id); setError("");
+    try {
+      const response = await fetch("/api/versions", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, versionId: version.id }) });
+      const result = await response.json() as { error?: string; restored?: number };
+      if (!response.ok) setError(result.error ?? "Could not restore this version."); else { setDrafts({}); setNotice(`Restored ${result.restored ?? version.file_count} files from “${version.label}”. Safety checkpoint created.`); await loadProject(); setPreviewNonce(value => value + 1); setShowVersions(false); }
+    } catch { setError("KODO could not reach version history. Nothing was restored."); }
+    finally { setVersionBusy(null); }
+  }
+
+  async function rollbackProduction(version: Version) {
+    if (versionBusy || !window.confirm(`Roll production back to “${version.label}”? KODO will save the current files, validate this version, and replace the live production deployment.`)) return;
+    setVersionBusy(version.id); setError(""); setNotice("");
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/rollback`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ versionId: version.id }) });
+      const result = await response.json() as { error?: string; detail?: string; rollback?: { restored: number }; deployment?: { id: string; status: string; url: string; provider: string }; check?: CheckResult; warning?: string };
+      if (!response.ok) {
+        setError([result.error, result.detail].filter(Boolean).join(" ") || "Production rollback failed.");
+        if (result.check) setCheckOutput([result.check.stdout, result.check.stderr, result.check.error].filter(Boolean).join("\n\n"));
+      } else if (result.deployment) {
+        setDrafts({});
+        setNotice(`Production rolled back to “${version.label}” (${result.rollback?.restored ?? version.file_count} files) on ${result.deployment.provider}.${result.warning ? ` ${result.warning}` : ""}`);
+        await loadProject(); setPreviewNonce(value => value + 1); setShowVersions(false);
+        if (result.deployment.status === "building") void pollDeployment(result.deployment.id, "Rollback", result.deployment.provider);
+      }
+    } catch { setError("KODO could not start the production rollback. The live site was not changed."); }
+    finally { setVersionBusy(null); }
   }
 
   async function shareProject() { await navigator.clipboard.writeText(window.location.href); setNotice("Project link copied."); }
@@ -313,11 +353,15 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
         <section className="work-panel">
           <header className="work-toolbar"><div className="view-switch"><button className={view === "preview" ? "active" : ""} onClick={() => setView("preview")}><Eye size={14} /> Preview</button><button className={view === "code" ? "active" : ""} onClick={() => setView("code")}><Code2 size={14} /> Code</button></div><div><button aria-label="Refresh preview" onClick={() => setPreviewNonce(value => value + 1)}><RefreshCw size={14} /></button><button onClick={() => setShowFiles(current => !current)}><Folder size={14} /> Files</button><button className={showVersions ? "active" : ""} onClick={() => setShowVersions(current => !current)}><History size={14} /> Versions</button><button onClick={() => void runCheck()} disabled={checking}><Terminal size={14} /> {checking ? "Checking…" : "Build"}</button><button aria-label="Preview settings"><Settings2 size={15} /></button></div></header>
           {view === "preview" ? <div className="live-preview"><div className="preview-browser"><div><button>←</button><button>→</button><button onClick={() => setPreviewNonce(value => value + 1)}>↻</button></div>{latestUrl ? <a href={latestUrl} target="_blank" rel="noreferrer">{latestUrl}<ExternalLink size={11} /></a> : <span>Secure instant preview</span>}<button>•••</button></div><iframe key={previewNonce} title={`${data?.project.name ?? "Project"} preview`} srcDoc={previewDocument} sandbox="allow-scripts allow-forms allow-modals allow-popups" /></div> : <div className="code-workspace">{showFiles ? <aside className="file-tree"><header><p>EXPLORER</p><button onClick={() => void createFile()} aria-label="New file"><Plus size={13} /></button></header>{data?.files.map(file => <button className={file.path === selectedPath ? "active" : ""} onClick={() => setSelectedPath(file.path)} key={file.id}>{file.path.includes("/") ? <Folder size={13} /> : file.language === "asset" ? <File size={13} /> : <FileCode2 size={13} />}<span>{file.path}</span></button>)}</aside> : null}<section className="editor"><div className="editor-tabs"><span><FileCode2 size={12} /> {selectedPath || "No file"}</span><div><button onClick={downloadFile} aria-label="Download file"><Download size={13} /></button><button onClick={() => void deleteFile()} aria-label="Delete file"><Trash2 size={13} /></button><button className="editor-save" disabled={!dirty || saving} onClick={() => void saveFile()}><Save size={13} /> {saving ? "Saving…" : "Save"}</button></div></div><textarea className="code-editor" value={editorValue} onChange={event => setDrafts(current => ({ ...current, [selectedPath]: event.target.value }))} spellCheck={false} aria-label={`Edit ${selectedPath}`} /><div className="editor-status"><span>{selectedFile?.language ?? "text"}</span><span>{editorValue.length.toLocaleString("en-IN")} characters · UTF-8</span></div></section></div>}
-          {showVersions ? <aside className="version-panel"><header><div><span>PROJECT HISTORY</span><h2>Versions</h2></div><button onClick={() => setShowVersions(false)}><X size={15} /></button></header><button className="checkpoint-button" onClick={() => void createCheckpoint()}><Plus size={13} /> Create checkpoint</button><div>{data?.versions.map(version => <article key={version.id}><span><History size={13} /></span><div><b>{version.label}</b><small>{new Date(version.created_at).toLocaleString()}</small></div><button onClick={() => void restoreVersion(version)}><RotateCcw size={13} /> Restore</button></article>)}{!data?.versions.length ? <p>No versions yet. Complete an agent run or save a file.</p> : null}</div></aside> : null}
+          {showVersions ? <aside className="version-panel"><header><div><span>PROJECT HISTORY</span><h2>Versions & rollback</h2></div><button onClick={() => setShowVersions(false)} aria-label="Close version history"><X size={15} /></button></header><div className="version-safety"><Check size={13} /><span><b>Safe restores</b><small>KODO checkpoints current files before every restore or production rollback.</small></span></div><button className="checkpoint-button" disabled={Boolean(versionBusy)} onClick={() => void createCheckpoint()}>{versionBusy === "checkpoint" ? <LoaderCircle size={13} /> : <Plus size={13} />} {versionBusy === "checkpoint" ? "Creating…" : "Create checkpoint"}</button><div>{data?.versions.map(version => {
+            const knownGood = version.deployment_environment === "production" && version.deployment_status === "ready";
+            const busy = versionBusy === version.id;
+            return <article className={knownGood ? "known-good" : ""} key={version.id}><span>{knownGood ? <Check size={13} /> : <History size={13} />}</span><div><b>{version.label}</b><small>{new Date(version.created_at).toLocaleString()} · {version.file_count} files</small>{knownGood ? <em>Known-good production</em> : version.deployment_status ? <em>{version.deployment_environment} · {version.deployment_status}</em> : null}</div><div className="version-actions"><button disabled={Boolean(versionBusy)} onClick={() => void restoreVersion(version)}>{busy ? <LoaderCircle size={13} /> : <RotateCcw size={13} />} Restore</button>{knownGood ? <button className="rollback-live" disabled={Boolean(versionBusy)} onClick={() => void rollbackProduction(version)}><Globe size={13} /> Rollback live</button> : null}</div></article>;
+          })}{!data?.versions.length ? <p>No versions yet. Complete an agent run or save a file.</p> : null}</div></aside> : null}
           {checkOutput ? <section className="builder-console"><header><span><Terminal size={13} /> Secure build output</span><button onClick={() => setCheckOutput("")}><X size={13} /></button></header><pre>{checkOutput}</pre></section> : null}
         </section>
       </div>
-      {publishOpen ? <div className="publish-layer" role="dialog" aria-modal="true"><button className="publish-scrim" onClick={() => setPublishOpen(false)} aria-label="Close" /><section className="publish-dialog"><button className="dialog-close" onClick={() => setPublishOpen(false)}><X size={18} /></button><span className="publish-icon"><Globe size={22} /></span><h2>Build and deploy</h2><p>KODO will run the production build in Vercel Sandbox, freeze a version and create a real Vercel preview or production URL.</p><div className="publish-checks"><span><Check size={13} /> Real project files</span><span><Check size={13} /> Versioned deployment</span><span><Check size={13} /> Live deployment status</span></div>{latestDeployment ? <div className={`latest-deployment ${latestDeployment.status}`}><span>{latestDeployment.status === "ready" ? <Check size={13} /> : latestDeployment.status === "failed" ? <CircleAlert size={13} /> : <LoaderCircle size={13} />} {latestDeployment.environment} · {latestDeployment.status}</span>{latestDeployment.url ? <a href={latestDeployment.url} target="_blank" rel="noreferrer">Open <ExternalLink size={11} /></a> : null}</div> : null}<button className="confirm-publish" disabled={publishing} onClick={() => void publish("production")}><Play size={14} /> {publishing ? "Building and deploying…" : "Deploy production"}</button><button className="preview-publish" disabled={publishing} onClick={() => void publish("preview")}>Create Vercel preview</button></section></div> : null}
+      {publishOpen ? <PublishingManager projectId={projectId} publishing={publishing} onPublish={publish} onClose={() => setPublishOpen(false)} /> : null}
       {githubOpen ? <div className="publish-layer" role="dialog" aria-modal="true">
         <button className="publish-scrim" onClick={() => setGithubOpen(false)} aria-label="Close" />
         <section className="publish-dialog github-dialog">

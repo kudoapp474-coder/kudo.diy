@@ -1,4 +1,5 @@
-import { slugify, type ProjectFileRecord } from "./project-files";
+import { type ProjectFileRecord } from "./project-files";
+import { kodoVercelProjectName } from "./vercel-project-config";
 
 type VercelDeploymentResponse = {
   id?: string;
@@ -79,7 +80,7 @@ export async function deployStaticProjectToVercel(name: string, projectId: strin
   const token = process.env.VERCEL_TOKEN;
   if (!vercelPublishingConfigured() || !token) return { configured: false as const };
   const deployable = files.filter(file => !file.path.startsWith("scripts/") && file.path !== "package.json");
-  const projectName = `${slugify(name) || "kodo-project"}-${projectId.slice(-8)}`.slice(0, 100);
+  const projectName = kodoVercelProjectName(name, projectId);
   const response = await fetch(deploymentApiUrl(), {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
