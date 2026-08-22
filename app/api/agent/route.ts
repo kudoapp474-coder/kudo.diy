@@ -2,13 +2,32 @@ import { ToolLoopAgent, isStepCount, tool } from "ai";
 import { z } from "zod";
 import { all, id, now } from "../../../lib/db";
 import { safeProjectPath, starterProjectFiles } from "../../../lib/project-files";
-import { DEFAULT_AGENT_MODEL_ID, isAgentModelId } from "../../../lib/agent-models";
+import {
+  AGENT_RUN_RESERVATION_CREDITS,
+  DEFAULT_AGENT_MODEL_ID,
+  calculateAgentCredits,
+  estimateAgentCostUsd,
+  isAgentModelId,
+} from "../../../lib/agent-models";
 import { requireApiUser, unauthorized } from "../../../lib/server-auth";
 import { nativeSandboxConfigured, runProjectChecks } from "../../../lib/vercel-sandbox";
 
 const CONFIGURED_DEFAULT_MODEL = isAgentModelId(process.env.KODO_MODEL) ? process.env.KODO_MODEL : DEFAULT_AGENT_MODEL_ID;
-const RUN_RESERVATION_CREDITS = 20;
 export const maxDuration = 300;
+
+function upstreamStatus(error: unknown) {
+  if (!error || typeof error !== "object") return 0;
+  const candidate = error as { status?: unknown; statusCode?: unknown; response?: { status?: unknown } };
+  for (const value of [candidate.status, candidate.statusCode, candidate.response?.status]) {
+    if (typeof value === "number") return value;
+  }
+  return 0;
+}
+
+function isUpstreamRateLimit(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  return upstreamStatus(error) === 429 || /\b429\b|rate[ -]?limit|too many requests/i.test(message);
+}
 
 export async function POST(request: Request) {
   const auth = await requireApiUser();
@@ -35,9 +54,9 @@ export async function POST(request: Request) {
   }
 
   const reservation = await auth.db.prepare("UPDATE workspaces SET credits = credits - ? WHERE id = ? AND credits >= ?")
-    .bind(RUN_RESERVATION_CREDITS, auth.workspaceId, RUN_RESERVATION_CREDITS).run();
+    .bind(AGENT_RUN_RESERVATION_CREDITS, auth.workspaceId, AGENT_RUN_RESERVATION_CREDITS).run();
   if ((reservation.meta?.changes ?? 0) === 0) {
-    return Response.json({ error: "Not enough credits. Recharge before starting this agent.", code: "INSUFFICIENT_CREDITS", creditsRequired: RUN_RESERVATION_CREDITS }, { status: 402 });
+    return Response.json({ error: "Not enough credits. Recharge before starting this agent.", code: "INSUFFICIENT_CREDITS", creditsRequired: AGENT_RUN_RESERVATION_CREDITS }, { status: 402 });
   }
 
   const generationId = id("gen");
@@ -46,7 +65,7 @@ export async function POST(request: Request) {
     await auth.db.prepare("INSERT INTO generations (id, workspace_id, project_id, user_email, model, prompt, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)")
       .bind(generationId, auth.workspaceId, projectId, auth.user.email, selectedModel, prompt.slice(0, 12000), timestamp, timestamp).run();
   } catch (error) {
-    await auth.db.prepare("UPDATE workspaces SET credits = credits + ? WHERE id = ?").bind(RUN_RESERVATION_CREDITS, auth.workspaceId).run();
+    await auth.db.prepare("UPDATE workspaces SET credits = credits + ? WHERE id = ?").bind(AGENT_RUN_RESERVATION_CREDITS, auth.workspaceId).run();
     throw error;
   }
 
@@ -121,12 +140,13 @@ Every website must be responsive, accessible, visually polished, and use real co
     const result = await agent.generate({ prompt: `${prompt}\n\nProject: ${existingProject.name}\nProject description: ${existingProject.description}\nProject ID: ${projectId}` });
     const inputTokens = result.totalUsage.inputTokens ?? 0;
     const outputTokens = result.totalUsage.outputTokens ?? 0;
-    const creditsUsed = Math.max(20, Math.ceil((inputTokens + outputTokens) / 100));
-    const additionalCredits = Math.max(0, creditsUsed - RUN_RESERVATION_CREDITS);
+    const creditsUsed = calculateAgentCredits(selectedModel, inputTokens, outputTokens);
+    const creditAdjustment = creditsUsed - AGENT_RUN_RESERVATION_CREDITS;
+    const estimatedCostUsd = estimateAgentCostUsd(selectedModel, inputTokens, outputTokens);
     await auth.db.batch([
       auth.db.prepare("UPDATE generations SET result = ?, steps_json = ?, status = 'complete', input_tokens = ?, output_tokens = ?, credits_used = ?, updated_at = ? WHERE id = ?").bind(result.text, JSON.stringify(steps), inputTokens, outputTokens, creditsUsed, now(), generationId),
-      auth.db.prepare("UPDATE workspaces SET credits = MAX(0, credits - ?) WHERE id = ?").bind(additionalCredits, auth.workspaceId),
-      auth.db.prepare("INSERT INTO usage_events (id, workspace_id, generation_id, kind, units, metadata_json, created_at) VALUES (?, ?, ?, 'agent_credit', ?, ?, ?)").bind(id("use"), auth.workspaceId, generationId, creditsUsed, JSON.stringify({ model: selectedModel, creditsUsed, inputTokens, outputTokens, sandboxChecks: steps.filter(step => step.type === "test").length }), now()),
+      auth.db.prepare("UPDATE workspaces SET credits = MAX(0, credits - ?) WHERE id = ?").bind(creditAdjustment, auth.workspaceId),
+      auth.db.prepare("INSERT INTO usage_events (id, workspace_id, generation_id, kind, units, metadata_json, created_at) VALUES (?, ?, ?, 'agent_credit', ?, ?, ?)").bind(id("use"), auth.workspaceId, generationId, creditsUsed, JSON.stringify({ model: selectedModel, creditsUsed, inputTokens, outputTokens, estimatedCostUsd, sandboxChecks: steps.filter(step => step.type === "test").length }), now()),
       auth.db.prepare("UPDATE projects SET updated_at = ? WHERE id = ? AND workspace_id = ?").bind(now(), projectId, auth.workspaceId),
     ]);
     const savedVersion = await auth.db.prepare("SELECT id FROM versions WHERE project_id = ? AND generation_id = ? LIMIT 1").bind(projectId, generationId).first();
@@ -136,13 +156,24 @@ Every website must be responsive, accessible, visually polished, and use real co
         .bind(id("ver"), projectId, generationId, prompt.slice(0, 100), JSON.stringify(files), now()).run();
     }
     const balance = await auth.db.prepare("SELECT credits FROM workspaces WHERE id = ?").bind(auth.workspaceId).first<{ credits: number }>();
-    return Response.json({ generationId, status: "complete", result: result.text, steps, usage: { inputTokens, outputTokens, creditsUsed, creditsRemaining: balance?.credits ?? 0 }, model: selectedModel });
+    return Response.json({ generationId, status: "complete", result: result.text, steps, usage: { inputTokens, outputTokens, creditsUsed, creditsRemaining: balance?.credits ?? 0, estimatedCostUsd }, model: selectedModel });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Agent failed";
+    const upstreamRateLimited = isUpstreamRateLimit(error);
     await auth.db.batch([
       auth.db.prepare("UPDATE generations SET status = 'error', error = ?, steps_json = ?, updated_at = ? WHERE id = ?").bind(message.slice(0, 1000), JSON.stringify(steps), now(), generationId),
-      auth.db.prepare("UPDATE workspaces SET credits = credits + ? WHERE id = ?").bind(RUN_RESERVATION_CREDITS, auth.workspaceId),
+      auth.db.prepare("UPDATE workspaces SET credits = credits + ? WHERE id = ?").bind(AGENT_RUN_RESERVATION_CREDITS, auth.workspaceId),
     ]);
-    return Response.json({ generationId, status: "error", error: "The agent could not complete this run. Check the AI connection and try again." }, { status: 502 });
+    if (upstreamRateLimited) {
+      return Response.json({
+        generationId,
+        status: "error",
+        error: "The selected AI provider is busy. Your reserved credits were refunded. Retry shortly or switch to GPT 5.4 Mini.",
+        code: "UPSTREAM_RATE_LIMITED",
+        retryable: true,
+        fallbackModel: "openai/gpt-5.4-mini",
+      }, { status: 429 });
+    }
+    return Response.json({ generationId, status: "error", error: "The agent could not complete this run. Your reserved credits were refunded; check the AI connection and try again.", code: "AGENT_FAILED", retryable: true }, { status: 502 });
   }
 }
