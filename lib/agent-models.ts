@@ -61,8 +61,9 @@ export function calculateAgentCredits(model: unknown, inputTokens: number, outpu
   return Math.max(policy.minimumCredits, weightedTokenCredits);
 }
 
-export function estimateAgentCostUsd(model: unknown, inputTokens: number, outputTokens: number) {
-  const policy = agentModelPolicy(model);
+export function estimateAgentCostUsd(value: unknown, inputTokens: number, outputTokens: number) {
+  const policy = AGENT_MODELS.find(model => model.id === value);
+  if (!policy) return null;
   const safeInput = Math.max(0, Number.isFinite(inputTokens) ? inputTokens : 0);
   const safeOutput = Math.max(0, Number.isFinite(outputTokens) ? outputTokens : 0);
   return (safeInput * policy.inputUsdPerMillion + safeOutput * policy.outputUsdPerMillion) / 1_000_000;
