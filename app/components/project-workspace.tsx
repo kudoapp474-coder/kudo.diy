@@ -54,7 +54,7 @@ function languageForPath(path: string) {
   return ({ html: "html", css: "css", js: "javascript", mjs: "javascript", ts: "typescript", tsx: "typescript", json: "json", md: "markdown" } as Record<string, string>)[extension ?? ""] ?? "text";
 }
 
-export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false }: { projectId: string; initialTask?: string; autoRun?: boolean }) {
+export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false, initialNotice = "" }: { projectId: string; initialTask?: string; autoRun?: boolean; initialNotice?: string }) {
   const [view, setView] = useState<"preview" | "code">("preview");
   const [prompt, setPrompt] = useState("");
   const [running, setRunning] = useState(false);
@@ -81,7 +81,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false 
   const [checking, setChecking] = useState(false);
   const [checkOutput, setCheckOutput] = useState("");
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState(initialNotice);
   const [previewNonce, setPreviewNonce] = useState(0);
   const uploadInput = useRef<HTMLInputElement>(null);
   const autoRunStarted = useRef(false);
