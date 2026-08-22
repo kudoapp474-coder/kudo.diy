@@ -161,3 +161,24 @@ test("wires complete secure Manage Publishing flows", async () => {
   assert.match(database, /CREATE TABLE IF NOT EXISTS project_domains/);
   assert.match(database, /CREATE TABLE IF NOT EXISTS project_databases/);
 });
+
+
+test("imports a connected GitHub repository before the first agent run", async () => {
+  const [composer, projectApi, importer] = await Promise.all([
+    readFile(new URL("../app/components/workspace-composer.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/projects/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/github-import.ts", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(composer, /api\/github\/repositories\?returnTo=\/workspace/);
+  assert.match(composer, /selectedRepository/);
+  assert.match(composer, /Importing repository/);
+  assert.match(projectApi, /importGitHubRepository/);
+  assert.match(projectApi, /GITHUB_IMPORT_FAILED/);
+  assert.match(projectApi, /auth\.db\.batch/);
+  assert.match(importer, /MAX_IMPORT_FILES = 80/);
+  assert.match(importer, /MAX_TOTAL_BYTES = 3_000_000/);
+  assert.match(importer, /name === "\.env"/);
+  assert.match(importer, /content\.includes\("\\0"\)/);
+  assert.doesNotMatch(composer, /GITHUB_APP_PRIVATE_KEY|Authorization:|Bearer /);
+});

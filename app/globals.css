@@ -241,3 +241,14 @@ body,.app-shell{background:#13120a;color:var(--ink)}
 .workspace-composer .composer-context-files button{width:22px;height:22px;border:0;background:transparent;color:#77756d;padding:0}
 .workspace-composer .composer-context-files button:hover{background:#24231c;color:#efede4}
 @media(max-width:680px){.composer-context-files li{max-width:100%}.workspace-composer .composer-repo{font-size:0}.workspace-composer .composer-repo svg{margin:0}}
+
+
+/* Workspace GitHub source picker */
+.workspace-composer>div{position:relative}.workspace-composer .composer-repo{max-width:230px}.workspace-composer .composer-repo>span{color:#646259}
+.composer-repo-menu{position:absolute;z-index:40;left:39px;bottom:40px;width:min(390px,calc(100vw - 48px));max-height:350px;overflow:hidden;border:1px solid #3a382f;background:#17160f;border-radius:12px;padding:7px;box-shadow:0 24px 70px rgba(0,0,0,.58)}
+.composer-repo-menu header{height:30px;padding:0 4px 0 8px;display:flex;align-items:center;justify-content:space-between;color:#646259;font-size:7px;letter-spacing:.1em}.workspace-composer .composer-repo-menu header button{width:24px;height:24px;border:0;background:transparent;padding:0}
+.workspace-composer .composer-repo-menu>button,.workspace-composer .composer-repo-list>button{width:100%;height:48px;border:0;background:transparent;padding:0 8px;display:grid;grid-template-columns:20px minmax(0,1fr);align-items:center;justify-content:initial;text-align:left}.workspace-composer .composer-repo-menu>button:hover,.workspace-composer .composer-repo-list>button:hover,.workspace-composer .composer-repo-menu button.selected{background:#24231c}
+.composer-repo-menu button>span{min-width:0;display:flex;flex-direction:column;gap:4px}.composer-repo-menu b,.composer-repo-menu small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.composer-repo-menu b{color:#d7d4ca;font-size:9px}.composer-repo-menu small{color:#646259;font-size:7px}
+.composer-repo-menu>p,.composer-repo-list>p{min-height:44px;margin:0;padding:0 9px;display:flex;align-items:center;gap:7px;color:#77756d;font-size:8px}.composer-repo-menu>p svg{animation:spin .9s linear infinite}
+.composer-repo-menu>a{height:38px;margin:5px;border:1px solid var(--line);border-radius:8px;color:#8facf4;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:7px;font-size:8px}.composer-repo-list{max-height:220px;overflow:auto;border-top:1px solid var(--line)}
+@media(max-width:680px){.composer-repo-menu{position:fixed;left:12px;right:12px;bottom:76px;width:auto;max-height:55vh}.workspace-composer .composer-repo{width:34px;padding:0}.workspace-composer .composer-repo>span{display:none}}
