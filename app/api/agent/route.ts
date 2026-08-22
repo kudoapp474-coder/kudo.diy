@@ -22,6 +22,15 @@ const CONFIGURED_DEFAULT_MODEL = isAgentModelId(process.env.KODO_MODEL) ? proces
 const STALE_AGENT_LOCK_MS = 10 * 60 * 1000;
 export const maxDuration = 300;
 
+type AgentStep = { type: string; label: string; status: string };
+
+function lastStepIndex(steps: AgentStep[], type: string) {
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    if (steps[index]?.type === type) return index;
+  }
+  return -1;
+}
+
 function upstreamStatus(error: unknown) {
   if (!error || typeof error !== "object") return 0;
   const candidate = error as { status?: unknown; statusCode?: unknown; response?: { status?: unknown } };
@@ -98,7 +107,7 @@ export async function POST(request: Request) {
 
   let reserved = false;
   let generationInserted = false;
-  const steps: Array<{ type: string; label: string; status: string }> = [];
+  const steps: AgentStep[] = [];
 
   try {
     const reservation = await auth.db.prepare("UPDATE workspaces SET credits = credits - ? WHERE id = ? AND credits >= ?")
@@ -114,13 +123,39 @@ export async function POST(request: Request) {
 
     const agent = new ToolLoopAgent({
       model: selectedModel,
-      instructions: `You are KODO, a careful production website coding agent. First inspect the existing files, then save a plan, edit only necessary files, run the production build, and create a version.
-The instant preview runtime is a dependency-free static web project. Build the complete experience in index.html, styles.css and script.js. Keep package.json and scripts/build.mjs working. You may use remote HTTPS image/font URLs, but do not add npm dependencies or frameworks unless the user explicitly asks and the static preview can still work.
+      instructions: `You are KODO, a production website coding agent. You must implement the user's request in the project files, not merely describe a design or print code in chat.
+The build lifecycle is enforced: inspect the project, save a concise plan, apply all necessary file changes, run the production check, repair failed checks when possible, create a version, then summarize the result.
+The instant preview runtime is a dependency-free static web project. For a new or redesigned experience, implement the complete visual result in index.html, styles.css and script.js. Keep package.json and scripts/build.mjs working. Use compact production code so the complete implementation fits in the file-application step. You may use remote HTTPS image, video and font URLs, but do not add npm dependencies or frameworks unless the user explicitly asks and the static preview still works.
+When applyProjectFiles is requested, send the complete contents of every file required to implement the plan in that single tool call. For full website/app builds, normally include index.html, styles.css and script.js together. Preserve unrelated existing files. Never put prose, markdown fences, or explanations inside file contents.
 Every website must be responsive, accessible, visually polished, and use real copy instead of placeholders. Implement interactions in script.js. Never claim a check passed if the sandbox reports skipped or failed. Keep the final response concise and list the files changed.`,
       stopWhen: [isStepCount(12), agentCreditStopCondition(selectedModel, runCreditBudget)],
-      prepareStep: ({ steps: completedSteps }) => ({
-        maxOutputTokens: agentStepOutputTokenLimit(selectedModel, runCreditBudget, completedSteps),
-      }),
+      prepareStep: ({ steps: completedSteps }) => {
+        const maxOutputTokens = agentStepOutputTokenLimit(selectedModel, runCreditBudget, completedSteps);
+        if (lastStepIndex(steps, "read") < 0) {
+          return { maxOutputTokens, toolChoice: { type: "tool", toolName: "inspectProject" } };
+        }
+        if (lastStepIndex(steps, "plan") < 0) {
+          return { maxOutputTokens, toolChoice: { type: "tool", toolName: "savePlan" } };
+        }
+
+        const versionIndex = lastStepIndex(steps, "version");
+        if (versionIndex >= 0) return { maxOutputTokens, toolChoice: "none" as const };
+
+        const editIndex = lastStepIndex(steps, "edit");
+        const testIndex = lastStepIndex(steps, "test");
+        const failedChecks = steps.filter(step => step.type === "test" && step.status === "failed").length;
+
+        if (editIndex < 0) {
+          return { maxOutputTokens, toolChoice: { type: "tool", toolName: "applyProjectFiles" } };
+        }
+        if (testIndex < editIndex) {
+          return { maxOutputTokens, toolChoice: { type: "tool", toolName: "runChecks" } };
+        }
+        if (steps[testIndex]?.status === "failed" && failedChecks < 2) {
+          return { maxOutputTokens, toolChoice: { type: "tool", toolName: "applyProjectFiles" } };
+        }
+        return { maxOutputTokens, toolChoice: { type: "tool", toolName: "createVersion" } };
+      },
       tools: {
         inspectProject: tool({
           description: "Read the current project file paths and their text content.",
@@ -139,17 +174,32 @@ Every website must be responsive, accessible, visually polished, and use real co
             return { saved: true, tasks };
           },
         }),
-        writeFile: tool({
-          description: "Create or replace one text project file.",
-          inputSchema: z.object({ path: z.string().min(1).max(240), content: z.string().max(120000), language: z.string().max(40).default("text") }),
-          execute: async ({ path, content, language }) => {
-            const normalizedPath = safeProjectPath(path);
-            if (!normalizedPath) return { saved: false, error: "Unsafe project path." };
-            const fileId = id("file");
-            await auth.db.prepare("INSERT INTO project_files (id, project_id, path, content, language, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(project_id, path) DO UPDATE SET content = excluded.content, language = excluded.language, updated_at = excluded.updated_at")
-              .bind(fileId, projectId, normalizedPath, content, language, now()).run();
-            steps.push({ type: "edit", label: `Updated ${normalizedPath}`, status: "complete" });
-            return { saved: true, path: normalizedPath, characters: content.length };
+        applyProjectFiles: tool({
+          description: "Apply the complete set of text file changes required by the plan in one batch. Include every file needed for the requested result, not a partial sketch.",
+          inputSchema: z.object({
+            files: z.array(z.object({
+              path: z.string().min(1).max(240),
+              content: z.string().max(120000),
+              language: z.string().max(40).default("text"),
+            })).min(1).max(12),
+          }),
+          execute: async ({ files }) => {
+            const normalizedFiles = files.map(file => ({ ...file, normalizedPath: safeProjectPath(file.path) }));
+            const invalid = normalizedFiles.find(file => !file.normalizedPath);
+            if (invalid) return { saved: false, error: `Unsafe project path: ${invalid.path}` };
+            const paths = normalizedFiles.map(file => file.normalizedPath as string);
+            if (new Set(paths).size !== paths.length) return { saved: false, error: "Duplicate project paths in one file batch." };
+
+            const updatedAt = now();
+            await auth.db.batch(normalizedFiles.map(file => auth.db.prepare("INSERT INTO project_files (id, project_id, path, content, language, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(project_id, path) DO UPDATE SET content = excluded.content, language = excluded.language, updated_at = excluded.updated_at")
+              .bind(id("file"), projectId, file.normalizedPath as string, file.content, file.language, updatedAt)));
+            for (const file of normalizedFiles) {
+              steps.push({ type: "edit", label: `Updated ${file.normalizedPath}`, status: "complete" });
+            }
+            return {
+              saved: true,
+              files: normalizedFiles.map(file => ({ path: file.normalizedPath, characters: file.content.length })),
+            };
           },
         }),
         runChecks: tool({
@@ -167,7 +217,7 @@ Every website must be responsive, accessible, visually polished, and use real co
           },
         }),
         createVersion: tool({
-          description: "Create an immutable project checkpoint after edits.",
+          description: "Create an immutable project checkpoint after edits and checks.",
           inputSchema: z.object({ label: z.string().min(1).max(120) }),
           execute: async ({ label }) => {
             const files = await all<{ path: string; content: string; language: string }>(auth.db.prepare("SELECT path, content, language FROM project_files WHERE project_id = ? ORDER BY path").bind(projectId));
@@ -185,17 +235,17 @@ Every website must be responsive, accessible, visually polished, and use real co
     const inputTokens = Number(result.totalUsage.inputTokens ?? 0);
     const outputTokens = Number(result.totalUsage.outputTokens ?? 0);
     const rawCreditsUsed = calculateAgentCredits(selectedModel, inputTokens, outputTokens);
-    const creditsUsed = Math.min(rawCreditsUsed, runCreditBudget);
+    const madeFileEdits = steps.some(step => step.type === "edit");
+    const creditsUsed = madeFileEdits ? Math.min(rawCreditsUsed, runCreditBudget) : 0;
     const budgetLimited = rawCreditsUsed >= runCreditBudget;
     if (budgetLimited) steps.push({ type: "budget", label: `Stopped at the ${runCreditBudget.toLocaleString("en-IN")}-credit run budget`, status: "complete" });
     const creditAdjustment = creditsUsed - AGENT_RUN_RESERVATION_CREDITS;
     const estimatedCostUsd = estimateAgentCostUsd(selectedModel, inputTokens, outputTokens);
-    const madeFileEdits = steps.some(step => step.type === "edit");
-    const finalText = result.text.trim() || (budgetLimited
-      ? "KODO reached the available credit budget for this run. Review the saved changes, then add credits or switch to GPT 5.4 Mini to continue."
-      : madeFileEdits
-        ? "KODO completed the run."
-        : "KODO planned the work but did not make any file changes. Try again, or describe the task with more specific detail.");
+    const finalText = !madeFileEdits
+      ? "KODO did not save any file changes in this run, so your reserved credits were refunded. Please retry the build."
+      : result.text.trim() || (budgetLimited
+        ? "KODO reached the available credit budget after saving changes. Review the live preview, then add credits or switch to GPT 5.4 Mini to continue."
+        : "KODO completed the run and saved the project changes.");
 
     await auth.db.batch([
       auth.db.prepare("UPDATE generations SET result = ?, steps_json = ?, status = 'complete', input_tokens = ?, output_tokens = ?, credits_used = ?, updated_at = ? WHERE id = ?")
@@ -214,16 +264,19 @@ Every website must be responsive, accessible, visually polished, and use real co
           dailyCreditsUsedBefore: spendWindow.used,
           dailyCreditsLimit: spendWindow.limit,
           sandboxChecks: steps.filter(step => step.type === "test").length,
+          madeFileEdits,
         }), now()),
       auth.db.prepare("UPDATE projects SET updated_at = ? WHERE id = ? AND workspace_id = ?").bind(now(), projectId, auth.workspaceId),
     ]);
     reserved = false;
 
-    const savedVersion = await auth.db.prepare("SELECT id FROM versions WHERE project_id = ? AND generation_id = ? LIMIT 1").bind(projectId, generationId).first();
-    if (!savedVersion) {
-      const files = await all<{ path: string; content: string; language: string }>(auth.db.prepare("SELECT path, content, language FROM project_files WHERE project_id = ? ORDER BY path").bind(projectId));
-      await auth.db.prepare("INSERT INTO versions (id, project_id, generation_id, label, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
-        .bind(id("ver"), projectId, generationId, prompt.slice(0, 100), JSON.stringify(files), now()).run();
+    if (madeFileEdits) {
+      const savedVersion = await auth.db.prepare("SELECT id FROM versions WHERE project_id = ? AND generation_id = ? LIMIT 1").bind(projectId, generationId).first();
+      if (!savedVersion) {
+        const files = await all<{ path: string; content: string; language: string }>(auth.db.prepare("SELECT path, content, language FROM project_files WHERE project_id = ? ORDER BY path").bind(projectId));
+        await auth.db.prepare("INSERT INTO versions (id, project_id, generation_id, label, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+          .bind(id("ver"), projectId, generationId, prompt.slice(0, 100), JSON.stringify(files), now()).run();
+      }
     }
 
     const balance = await auth.db.prepare("SELECT credits FROM workspaces WHERE id = ?").bind(auth.workspaceId).first<{ credits: number }>();
