@@ -72,7 +72,7 @@ export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false,
   const [githubConnected, setGithubConnected] = useState<boolean | null>(null);
   const [githubRepositories, setGithubRepositories] = useState<GitHubRepository[]>([]);
   const [githubLoadError, setGithubLoadError] = useState("");
-  const [githubConnectUrl, setGithubConnectUrl] = useState("/api/github/connect");
+  const [githubConnectUrl, setGithubConnectUrl] = useState(`/api/github/connect?returnTo=${encodeURIComponent(`/project/${projectId}`)}`);
   const [githubRepository, setGithubRepository] = useState("");
   const [githubBranch, setGithubBranch] = useState("");
   const [data, setData] = useState<ProjectData | null>(null);
