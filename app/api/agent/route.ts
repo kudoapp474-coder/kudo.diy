@@ -190,9 +190,12 @@ Every website must be responsive, accessible, visually polished, and use real co
     if (budgetLimited) steps.push({ type: "budget", label: `Stopped at the ${runCreditBudget.toLocaleString("en-IN")}-credit run budget`, status: "complete" });
     const creditAdjustment = creditsUsed - AGENT_RUN_RESERVATION_CREDITS;
     const estimatedCostUsd = estimateAgentCostUsd(selectedModel, inputTokens, outputTokens);
+    const madeFileEdits = steps.some(step => step.type === "edit");
     const finalText = result.text.trim() || (budgetLimited
       ? "KODO reached the available credit budget for this run. Review the saved changes, then add credits or switch to GPT 5.4 Mini to continue."
-      : "KODO completed the run.");
+      : madeFileEdits
+        ? "KODO completed the run."
+        : "KODO planned the work but did not make any file changes. Try again, or describe the task with more specific detail.");
 
     await auth.db.batch([
       auth.db.prepare("UPDATE generations SET result = ?, steps_json = ?, status = 'complete', input_tokens = ?, output_tokens = ?, credits_used = ?, updated_at = ? WHERE id = ?")
