@@ -56,7 +56,8 @@ function formatDate(value: string | null) {
   return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" }).format(date);
 }
 
-function formatUsd(value: number) {
+function formatUsd(value: number | null) {
+  if (value === null) return "—";
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: value < 1 ? 4 : 2, maximumFractionDigits: value < 1 ? 4 : 2 }).format(value);
 }
 
