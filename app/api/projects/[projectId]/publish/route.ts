@@ -34,17 +34,36 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
     const origin = new URL(request.url).origin;
     const kodoUrl = `${origin}/p/${encodeURIComponent(projectId)}`;
     const dedicated = await deployStaticProjectToVercel(project.name, projectId, files, target);
-    const url = kodoUrl;
-    const warning = dedicated.configured && "error" in dedicated ? `${dedicated.error} Published on the secure KODO URL instead.` : null;
+    if (dedicated.configured && "error" in dedicated) {
+      await auth.db.prepare("UPDATE deployments SET status = 'failed', updated_at = ? WHERE id = ?").bind(now(), deploymentId).run();
+      return Response.json({ error: "Vercel could not deploy this project.", detail: dedicated.error, deploymentId }, { status: 502 });
+    }
+    const realDeployment = dedicated.configured ? dedicated : null;
+    const url = realDeployment?.url ?? kodoUrl;
+    const deploymentStatus = realDeployment?.status ?? "ready";
+    const projectStatus = deploymentStatus === "ready" ? "published" : "deploying";
+    const warning = dedicated.configured ? null : "Vercel publishing is not connected, so KODO used its secure public URL.";
     const updateProject = target === "preview"
-      ? auth.db.prepare("UPDATE projects SET status = 'published', preview_url = ?, updated_at = ? WHERE id = ? AND workspace_id = ?").bind(url, now(), projectId, auth.workspaceId)
-      : auth.db.prepare("UPDATE projects SET status = 'published', production_url = ?, updated_at = ? WHERE id = ? AND workspace_id = ?").bind(url, now(), projectId, auth.workspaceId);
+      ? auth.db.prepare("UPDATE projects SET status = ?, preview_url = ?, updated_at = ? WHERE id = ? AND workspace_id = ?").bind(projectStatus, url, now(), projectId, auth.workspaceId)
+      : auth.db.prepare("UPDATE projects SET status = ?, production_url = ?, updated_at = ? WHERE id = ? AND workspace_id = ?").bind(projectStatus, url, now(), projectId, auth.workspaceId);
     await auth.db.batch([
-      auth.db.prepare("UPDATE deployments SET status = 'ready', url = ?, updated_at = ? WHERE id = ?").bind(url, now(), deploymentId),
+      auth.db.prepare("UPDATE deployments SET status = ?, url = ?, updated_at = ? WHERE id = ?").bind(deploymentStatus, url, now(), deploymentId),
       updateProject,
     ]);
-    const externalUrl = dedicated.configured && "url" in dedicated ? dedicated.url ?? null : null;
-    return Response.json({ deployment: { id: deploymentId, versionId, environment: target, status: "ready", url, provider: "KODO on Vercel", externalUrl }, check, warning }, { status: 201 });
+    return Response.json({
+      deployment: {
+        id: deploymentId,
+        providerId: realDeployment?.id ?? null,
+        versionId,
+        environment: target,
+        status: deploymentStatus,
+        url,
+        provider: realDeployment ? "Vercel" : "KODO secure hosting",
+        fallbackUrl: kodoUrl,
+      },
+      check,
+      warning,
+    }, { status: deploymentStatus === "ready" ? 201 : 202 });
   } catch (error) {
     await auth.db.prepare("UPDATE deployments SET status = 'failed', updated_at = ? WHERE id = ?").bind(now(), deploymentId).run();
     const detail = error instanceof Error ? error.message : "Publish failed";
