@@ -1,98 +1,247 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import {
-  ArrowUp,
-  Check,
-  ChevronDown,
-  Code2,
-  Eye,
-  File,
-  FileCode2,
-  Folder,
-  GitBranch,
-  Globe,
-  MoreHorizontal,
-  Paperclip,
-  Play,
-  Plus,
-  RefreshCw,
-  Settings2,
-  Sparkles,
-  Terminal,
-  X,
+  ArrowUp, Check, ChevronDown, CircleAlert, Code2, Download, ExternalLink, Eye, File, FileCode2,
+  Folder, GitBranch, Github, Globe, History, LoaderCircle, MoreHorizontal, Paperclip, Play, Plus,
+  RefreshCw, RotateCcw, Save, Settings2, Sparkles, Terminal, Trash2, X,
 } from "lucide-react";
+import { renderProjectDocument } from "../../lib/project-files";
 import { BrandLogo } from "./brand-logo";
 
-const fileTree = ["app", "components", "lib", "public"];
+type ProjectFile = { id: string; path: string; content: string; language: string; updated_at: string };
+type Generation = { id: string; prompt: string; result: string | null; status: string; model: string; credits_used: number; error: string | null; steps_json: string; created_at: string };
+type Version = { id: string; label: string; generation_id: string | null; created_at: string };
+type Deployment = { id: string; version_id: string; environment: string; status: string; url: string | null; created_at: string };
+type ProjectData = {
+  project: { id: string; name: string; description: string; repository: string | null; branch: string; status: string; preview_url: string | null; production_url: string | null };
+  files: ProjectFile[]; generations: Generation[]; versions: Version[]; deployments: Deployment[];
+  workspace: { plan: string; credits: number } | null;
+};
+type AgentStep = { type: string; label: string; status: string };
+type ChatMessage = { id: string; role: "user" | "agent"; text: string; done?: boolean; connectUrl?: string; credits?: number; steps?: AgentStep[] };
+type CheckResult = { status?: string; phase?: string; command?: string; stdout?: string; stderr?: string; error?: string };
 
-type ChatMessage = { role: "user" | "agent"; text: string; done?: boolean; connectUrl?: string };
+function parseSteps(value: string) {
+  try { const parsed = JSON.parse(value) as AgentStep[]; return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+}
 
-export function ProjectWorkspace({ projectId }: { projectId: string }) {
+function messagesFromGenerations(generations: Generation[]): ChatMessage[] {
+  if (!generations.length) return [{ id: "welcome", role: "agent", text: "Your real project files are ready. Describe the website and KODO will edit them, run checks and save a version." }];
+  return generations.toReversed().flatMap(generation => [
+    { id: `${generation.id}-user`, role: "user" as const, text: generation.prompt },
+    { id: `${generation.id}-agent`, role: "agent" as const, text: generation.result || generation.error || "The agent run did not return a summary.", done: generation.status === "complete", credits: generation.credits_used, steps: parseSteps(generation.steps_json) },
+  ]);
+}
+
+function languageForPath(path: string) {
+  const extension = path.split(".").pop()?.toLowerCase();
+  return ({ html: "html", css: "css", js: "javascript", mjs: "javascript", ts: "typescript", tsx: "typescript", json: "json", md: "markdown" } as Record<string, string>)[extension ?? ""] ?? "text";
+}
+
+export function ProjectWorkspace({ projectId, initialTask = "", autoRun = false }: { projectId: string; initialTask?: string; autoRun?: boolean }) {
   const [view, setView] = useState<"preview" | "code">("preview");
   const [prompt, setPrompt] = useState("");
   const [running, setRunning] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [showFiles, setShowFiles] = useState(true);
-  const [published, setPublished] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: "user", text: "Build a premium homepage for KODO with a working product preview." },
-    { role: "agent", text: "Project workspace is ready. Connect the AI Gateway in Integrations to run this request on the production coding agent.", connectUrl: "/integrations" },
-  ]);
+  const [showVersions, setShowVersions] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [githubOpen, setGithubOpen] = useState(false);
+  const [githubBusy, setGithubBusy] = useState(false);
+  const [githubRepository, setGithubRepository] = useState("");
+  const [githubBranch, setGithubBranch] = useState("");
+  const [data, setData] = useState<ProjectData | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [selectedPath, setSelectedPath] = useState("index.html");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checkOutput, setCheckOutput] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [previewNonce, setPreviewNonce] = useState(0);
   const uploadInput = useRef<HTMLInputElement>(null);
+  const autoRunStarted = useRef(false);
+  const startInitialRun = useEffectEvent((task: string) => { void runAgent(task); });
 
-  async function runAgent() {
-    if (!prompt.trim() || running) return;
-    const task = prompt.trim();
-    setMessages((current) => [...current, { role: "user", text: task }]);
-    setPrompt("");
-    setRunning(true);
+  function applyProject(payload: ProjectData) {
+    setData(payload);
+    setMessages(messagesFromGenerations(payload.generations));
+    setGithubRepository(payload.project.repository ?? "");
+    setGithubBranch(payload.project.branch === "main" ? "" : payload.project.branch);
+    setSelectedPath(current => payload.files.some(file => file.path === current) ? current : payload.files.find(file => file.path === "index.html")?.path ?? payload.files[0]?.path ?? "");
+  }
+
+  async function fetchProject() {
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}`, { cache: "no-store" });
+    const payload = await response.json() as ProjectData & { error?: string };
+    if (!response.ok) throw new Error(payload.error ?? "Could not load the project.");
+    return payload;
+  }
+
+  async function loadProject() {
+    const payload = await fetchProject();
+    applyProject(payload);
+    return payload;
+  }
+
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/projects/${encodeURIComponent(projectId)}`, { cache: "no-store" })
+      .then(async response => {
+        const payload = await response.json() as ProjectData & { error?: string };
+        if (!response.ok) throw new Error(payload.error ?? "Could not load the project.");
+        return payload;
+      })
+      .then(payload => { if (active) applyProject(payload); })
+      .catch(reason => { if (active) setError(reason instanceof Error ? reason.message : "Could not load the project."); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!loading && data && autoRun && initialTask.trim() && !data.generations.length && !autoRunStarted.current) {
+      autoRunStarted.current = true;
+      startInitialRun(initialTask);
+    }
+  }, [loading, data, autoRun, initialTask]);
+
+  const previewDocument = useMemo(() => renderProjectDocument(data?.files ?? [], data?.project.name), [data?.files, data?.project.name]);
+  const selectedFile = data?.files.find(file => file.path === selectedPath) ?? null;
+  const editorValue = drafts[selectedPath] ?? selectedFile?.content ?? "";
+  const dirty = Boolean(selectedFile && editorValue !== selectedFile.content);
+  const latestUrl = data?.project.production_url || data?.project.preview_url;
+
+  async function runAgent(override?: string) {
+    const task = (override ?? prompt).trim();
+    if (!task || running) return;
+    if (Number(data?.workspace?.credits ?? 20) < 20) { setError("At least 20 credits are required for an agent run. Recharge from Billing."); return; }
+    setError(""); setNotice("");
+    setMessages(current => [...current, { id: `local-user-${Date.now()}`, role: "user", text: task }]);
+    setPrompt(""); setRunning(true);
     try {
       const response = await fetch("/api/agent", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, prompt: task }) });
-      const data = await response.json() as { result?: string; error?: string; connectUrl?: string };
-      setMessages((current) => [...current, { role: "agent", text: data.result ?? data.error ?? "The agent could not complete this run.", done: response.ok, connectUrl: data.connectUrl }]);
-    } catch {
-      setMessages((current) => [...current, { role: "agent", text: "KODO could not reach the agent service. Please try again." }]);
-    } finally {
-      setRunning(false);
-    }
+      const result = await response.json() as { result?: string; error?: string; connectUrl?: string; usage?: { creditsUsed?: number }; steps?: AgentStep[] };
+      setMessages(current => [...current, { id: `local-agent-${Date.now()}`, role: "agent", text: result.result ?? result.error ?? "The agent could not complete this run.", done: response.ok, connectUrl: result.connectUrl, credits: result.usage?.creditsUsed, steps: result.steps }]);
+      if (!response.ok) setError(result.error ?? "The agent could not complete this run.");
+      setDrafts({}); await loadProject(); setPreviewNonce(value => value + 1);
+      window.history.replaceState(null, "", `/project/${projectId}`);
+    } catch { setError("KODO could not reach the agent service. Your reserved credits were not charged."); }
+    finally { setRunning(false); }
   }
 
-  async function uploadFile(file?: File) {
-    if (!file) return;
-    const form = new FormData();
-    form.set("projectId", projectId);
-    form.set("file", file);
-    const response = await fetch("/api/uploads", { method: "POST", body: form });
-    const data = await response.json() as { file?: { name: string }; error?: string };
-    setMessages((current) => [...current, { role: "agent", text: response.ok ? `${data.file?.name ?? "File"} was uploaded and added to project context.` : data.error ?? "Upload failed." }]);
+  async function saveFile() {
+    if (!selectedPath || !selectedFile || saving) return;
+    setSaving(true); setError("");
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: selectedPath, content: editorValue, language: selectedFile.language }) });
+    const result = await response.json() as { error?: string };
+    if (!response.ok) setError(result.error ?? "Could not save the file.");
+    else { setDrafts(current => { const next = { ...current }; delete next[selectedPath]; return next; }); setNotice(`${selectedPath} saved and versioned.`); await loadProject(); setPreviewNonce(value => value + 1); }
+    setSaving(false);
   }
+
+  async function createFile() {
+    const path = window.prompt("New file path (for example sections/about.html)")?.trim(); if (!path) return;
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ path, content: "", language: languageForPath(path) }) });
+    const result = await response.json() as { error?: string };
+    if (!response.ok) { setError(result.error ?? "Could not create the file."); return; }
+    await loadProject(); setSelectedPath(path); setView("code");
+  }
+
+  async function deleteFile() {
+    if (!selectedPath || !window.confirm(`Delete ${selectedPath}?`)) return;
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: selectedPath }) });
+    const result = await response.json() as { error?: string };
+    if (!response.ok) { setError(result.error ?? "Could not delete the file."); return; }
+    setDrafts(current => { const next = { ...current }; delete next[selectedPath]; return next; }); await loadProject(); setNotice(`${selectedPath} deleted.`);
+  }
+
+  function downloadFile() {
+    if (!selectedFile) return;
+    const url = URL.createObjectURL(new Blob([editorValue], { type: "text/plain;charset=utf-8" }));
+    const anchor = document.createElement("a"); anchor.href = url; anchor.download = selectedFile.path.split("/").pop() || "project-file.txt"; anchor.click(); URL.revokeObjectURL(url);
+  }
+
+  async function uploadFile(file?: globalThis.File) {
+    if (!file) return;
+    const form = new FormData(); form.set("projectId", projectId); form.set("file", file);
+    const response = await fetch("/api/uploads", { method: "POST", body: form });
+    const result = await response.json() as { file?: { name: string }; error?: string };
+    if (!response.ok) setError(result.error ?? "Upload failed."); else { setNotice(`${result.file?.name ?? "File"} uploaded to project context.`); await loadProject(); }
+  }
+
+  async function runCheck() {
+    if (checking) return; setChecking(true); setCheckOutput("Starting secure production build…");
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/check`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ command: "npm run build" }) });
+    const result = await response.json() as { result?: CheckResult; error?: string; detail?: string }; const check = result.result;
+    setCheckOutput([check?.status ? `Status: ${check.status}` : result.error, check?.phase ? `Phase: ${check.phase}` : "", check?.stdout ?? "", check?.stderr ?? "", check?.error ?? result.detail ?? ""].filter(Boolean).join("\n\n"));
+    if (!response.ok) setError(result.error ?? "Build check failed."); else { setNotice("Production build passed in Vercel Sandbox."); await loadProject(); }
+    setChecking(false);
+  }
+
+  async function publish(target: "preview" | "production") {
+    if (publishing) return; setPublishing(true); setError("");
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/publish`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ target }) });
+    const result = await response.json() as { deployment?: { url: string }; error?: string; warning?: string; check?: CheckResult };
+    if (!response.ok) { setError(result.error ?? "Publish failed."); if (result.check) setCheckOutput([result.check.stdout, result.check.stderr, result.check.error].filter(Boolean).join("\n\n")); }
+    else { setNotice(`${target === "production" ? "Production" : "Preview"} is live: ${result.deployment?.url}${result.warning ? ` · ${result.warning}` : ""}`); setPublishOpen(false); await loadProject(); }
+    setPublishing(false);
+  }
+
+  async function exportToGitHub() {
+    if (!githubRepository.trim() || githubBusy) return; setGithubBusy(true); setError("");
+    const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/github`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repository: githubRepository, branch: githubBranch }) });
+    const result = await response.json() as { error?: string; repository?: string; branch?: string };
+    if (!response.ok) setError(result.error ?? "GitHub export failed."); else { setNotice(`Project committed to ${result.repository} on ${result.branch}.`); setGithubOpen(false); await loadProject(); }
+    setGithubBusy(false);
+  }
+
+  async function createCheckpoint() {
+    const response = await fetch("/api/versions", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, label: "Manual checkpoint" }) });
+    const result = await response.json() as { error?: string };
+    if (!response.ok) setError(result.error ?? "Could not create a checkpoint."); else { setNotice("Manual checkpoint created."); await loadProject(); }
+  }
+
+  async function restoreVersion(version: Version) {
+    if (!window.confirm(`Restore “${version.label}”? KODO will save the current files first.`)) return;
+    const response = await fetch("/api/versions", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ projectId, versionId: version.id }) });
+    const result = await response.json() as { error?: string };
+    if (!response.ok) setError(result.error ?? "Could not restore this version."); else { setDrafts({}); setNotice(`Restored ${version.label}.`); await loadProject(); setPreviewNonce(value => value + 1); setShowVersions(false); }
+  }
+
+  async function shareProject() { await navigator.clipboard.writeText(window.location.href); setNotice("Project link copied."); }
+
+  if (loading) return <main className="builder-loading"><LoaderCircle size={24} /> Loading real project files…</main>;
 
   return (
     <main className="builder-shell">
       <header className="builder-topbar">
-        <div><a className="builder-logo" href="/"><BrandLogo size="compact" /></a><span className="builder-divider" /><a className="builder-project-name" href="/projects"><span className="project-glyph violet"><Sparkles size={12} /></span><b>{projectId === "new" ? "Untitled project" : projectId.replaceAll("-", " ")}</b><ChevronDown size={13} /></a></div>
-        <div className="builder-top-actions"><span className="save-state"><Check size={12} /> Saved</span><button><GitBranch size={14} /> main <ChevronDown size={12} /></button><button className="share-btn">Share</button><button className="publish-btn" onClick={() => setPublished(true)}><Globe size={14} /> Publish</button><span className="user-avatar">N</span></div>
+        <div><Link className="builder-logo" href="/"><BrandLogo size="compact" /></Link><span className="builder-divider" /><Link className="builder-project-name" href="/projects"><span className="project-glyph violet"><Sparkles size={12} /></span><b>{data?.project.name ?? projectId}</b><ChevronDown size={13} /></Link></div>
+        <div className="builder-top-actions"><span className={`save-state ${dirty ? "dirty" : ""}`}>{dirty ? <CircleAlert size={12} /> : <Check size={12} />} {dirty ? "Unsaved" : "Saved"}</span><button onClick={() => setGithubOpen(true)}><GitBranch size={14} /> {data?.project.branch ?? "main"} <ChevronDown size={12} /></button><button className="share-btn" onClick={() => void shareProject()}>Share</button><button className="publish-btn" onClick={() => setPublishOpen(true)}><Globe size={14} /> Publish</button><span className="builder-credits">{Number(data?.workspace?.credits ?? 0).toLocaleString("en-IN")} credits</span></div>
       </header>
-
+      {(error || notice) ? <div className={`builder-toast ${error ? "error" : "success"}`}><span>{error || notice}</span><button onClick={() => { setError(""); setNotice(""); }}><X size={14} /></button></div> : null}
       <div className="builder-body">
         <aside className="agent-panel">
           <div className="agent-panel-head"><div><span className="online-dot" /><b>KODO Agent</b></div><button aria-label="Agent options"><MoreHorizontal size={17} /></button></div>
           <div className="conversation">
-            <div className="agent-intro"><span><Sparkles size={16} /></span><h1>Build with KODO</h1><p>Ask for a feature, a fix, or a complete redesign. KODO understands your project and handles the implementation.</p></div>
-            {messages.map((message, index) => <div className={`message ${message.role}`} key={`${message.role}-${index}`}><span className="message-role">{message.role === "user" ? "You" : <><Sparkles size={11} /> KODO</>}</span><p>{message.text}</p>{message.connectUrl && <a className="message-connect" href={message.connectUrl}>Open integrations</a>}{message.done && <div className="change-summary"><span><Check size={12} /> Agent run completed</span><div><FileCode2 size={13} /><b>Changes saved to project</b><em>Versioned</em></div><button onClick={() => setView("code")}>Review changes</button></div>}</div>)}
-            {running && <div className="message agent running-message"><span className="message-role"><Sparkles size={11} /> KODO</span><div className="thinking-line"><i /><span>Reading your project and making changes</span></div><div className="thinking-steps"><span><Check size={11} /> Understanding request</span><span className="current"><i /> Editing project files</span><span>Running checks</span></div></div>}
+            <div className="agent-intro"><span><Sparkles size={16} /></span><h1>Build with KODO</h1><p>Ask for a complete website or a precise edit. Every real file and version stays in this project.</p></div>
+            {messages.map(message => <div className={`message ${message.role}`} key={message.id}><span className="message-role">{message.role === "user" ? "You" : <><Sparkles size={11} /> KODO</>}</span><p>{message.text}</p>{message.connectUrl ? <a className="message-connect" href={message.connectUrl}>Open integrations</a> : null}{message.done ? <div className="change-summary"><span><Check size={12} /> Agent run completed{message.credits ? ` · ${message.credits} credits` : ""}</span>{message.steps?.slice(-5).map((step, index) => <div key={`${step.label}-${index}`}><FileCode2 size={13} /><b>{step.label}</b><em>{step.status}</em></div>)}<button onClick={() => setView("code")}>Review real files</button></div> : null}</div>)}
+            {running ? <div className="message agent running-message"><span className="message-role"><Sparkles size={11} /> KODO</span><div className="thinking-line"><i /><span>Reading your project and making real changes</span></div><div className="thinking-steps"><span><Check size={11} /> Understanding request</span><span className="current"><i /> Editing project files</span><span>Running checks and saving version</span></div></div> : null}
           </div>
-          <div className="agent-composer"><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") runAgent(); }} placeholder="Ask KODO to build, change, or fix..." aria-label="Message KODO" /><input ref={uploadInput} className="hidden-file-input" type="file" onChange={(event) => uploadFile(event.target.files?.[0])} /><div><button aria-label="Add context" onClick={() => uploadInput.current?.click()}><Plus size={17} /></button><button className="attach-button" onClick={() => uploadInput.current?.click()}><Paperclip size={14} /> Attach</button><span className="composer-spacer" /><button className="model-button"><Sparkles size={13} /> GPT-5.6 Sol <ChevronDown size={11} /></button><button className="send-button" disabled={!prompt.trim() || running} onClick={runAgent}><ArrowUp size={16} /></button></div></div>
+          <div className="agent-composer"><textarea value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void runAgent(); }} placeholder="Ask KODO to build, change, or fix…" aria-label="Message KODO" /><input ref={uploadInput} className="hidden-file-input" type="file" onChange={event => void uploadFile(event.target.files?.[0])} /><div><button aria-label="Add context" onClick={() => uploadInput.current?.click()}><Plus size={17} /></button><button className="attach-button" onClick={() => uploadInput.current?.click()}><Paperclip size={14} /> Attach</button><span className="composer-spacer" /><button className="model-button"><Sparkles size={13} /> GPT-5.6 Sol <ChevronDown size={11} /></button><button className="send-button" disabled={!prompt.trim() || running} onClick={() => void runAgent()}><ArrowUp size={16} /></button></div></div>
         </aside>
-
         <section className="work-panel">
-          <header className="work-toolbar"><div className="view-switch"><button className={view === "preview" ? "active" : ""} onClick={() => setView("preview")}><Eye size={14} /> Preview</button><button className={view === "code" ? "active" : ""} onClick={() => setView("code")}><Code2 size={14} /> Code</button></div><div><button aria-label="Refresh"><RefreshCw size={14} /></button><button onClick={() => setShowFiles((current) => !current)}><Folder size={14} /> Files</button><button><Terminal size={14} /> Console</button><button aria-label="Preview settings"><Settings2 size={15} /></button></div></header>
-
-          {view === "preview" ? <div className="live-preview"><div className="preview-browser"><div><button>←</button><button>→</button><button>↻</button></div><span>https://kodo-preview.local</span><button>•••</button></div><div className="built-page"><nav><b>Acme Labs</b><div><span>Work</span><span>About</span><button>Start a project</button></div></nav><section><small>DESIGN & ENGINEERING STUDIO</small><h2>Software for<br />what comes next.</h2><p>We partner with ambitious teams to design and build useful digital products.</p><button>Explore our work <ArrowUp size={15} /></button></section><footer><span>Independent studio · 2026</span><span>New York / Remote</span></footer></div></div> : <div className="code-workspace">{showFiles && <aside className="file-tree"><p>EXPLORER</p>{fileTree.map((file, index) => <div key={file}><Folder size={13} fill="currentColor" /><span>{file}</span><ChevronDown size={11} /></div>)}<span><File size={13} /> package.json</span><span className="active"><FileCode2 size={13} /> page.tsx</span><span><FileCode2 size={13} /> globals.css</span></aside>}<section className="editor"><div className="editor-tabs"><span><FileCode2 size={12} /> page.tsx <X size={11} /></span><span><FileCode2 size={12} /> globals.css</span></div><pre><code>{`export default function Home() {\n  return (\n    <main className="studio-page">\n      <Navigation />\n      <section className="hero">\n        <p>DESIGN & ENGINEERING STUDIO</p>\n        <h1>Software for\n          what comes next.</h1>\n        <ProjectGrid />\n      </section>\n    </main>\n  );\n}`}</code></pre><div className="editor-status"><span>Ln 8, Col 22</span><span>TypeScript React · UTF-8</span></div></section></div>}
+          <header className="work-toolbar"><div className="view-switch"><button className={view === "preview" ? "active" : ""} onClick={() => setView("preview")}><Eye size={14} /> Preview</button><button className={view === "code" ? "active" : ""} onClick={() => setView("code")}><Code2 size={14} /> Code</button></div><div><button aria-label="Refresh preview" onClick={() => setPreviewNonce(value => value + 1)}><RefreshCw size={14} /></button><button onClick={() => setShowFiles(current => !current)}><Folder size={14} /> Files</button><button className={showVersions ? "active" : ""} onClick={() => setShowVersions(current => !current)}><History size={14} /> Versions</button><button onClick={() => void runCheck()} disabled={checking}><Terminal size={14} /> {checking ? "Checking…" : "Build"}</button><button aria-label="Preview settings"><Settings2 size={15} /></button></div></header>
+          {view === "preview" ? <div className="live-preview"><div className="preview-browser"><div><button>←</button><button>→</button><button onClick={() => setPreviewNonce(value => value + 1)}>↻</button></div>{latestUrl ? <a href={latestUrl} target="_blank" rel="noreferrer">{latestUrl}<ExternalLink size={11} /></a> : <span>Secure instant preview</span>}<button>•••</button></div><iframe key={previewNonce} title={`${data?.project.name ?? "Project"} preview`} srcDoc={previewDocument} sandbox="allow-scripts allow-forms allow-modals allow-popups" /></div> : <div className="code-workspace">{showFiles ? <aside className="file-tree"><header><p>EXPLORER</p><button onClick={() => void createFile()} aria-label="New file"><Plus size={13} /></button></header>{data?.files.map(file => <button className={file.path === selectedPath ? "active" : ""} onClick={() => setSelectedPath(file.path)} key={file.id}>{file.path.includes("/") ? <Folder size={13} /> : file.language === "asset" ? <File size={13} /> : <FileCode2 size={13} />}<span>{file.path}</span></button>)}</aside> : null}<section className="editor"><div className="editor-tabs"><span><FileCode2 size={12} /> {selectedPath || "No file"}</span><div><button onClick={downloadFile} aria-label="Download file"><Download size={13} /></button><button onClick={() => void deleteFile()} aria-label="Delete file"><Trash2 size={13} /></button><button className="editor-save" disabled={!dirty || saving} onClick={() => void saveFile()}><Save size={13} /> {saving ? "Saving…" : "Save"}</button></div></div><textarea className="code-editor" value={editorValue} onChange={event => setDrafts(current => ({ ...current, [selectedPath]: event.target.value }))} spellCheck={false} aria-label={`Edit ${selectedPath}`} /><div className="editor-status"><span>{selectedFile?.language ?? "text"}</span><span>{editorValue.length.toLocaleString("en-IN")} characters · UTF-8</span></div></section></div>}
+          {showVersions ? <aside className="version-panel"><header><div><span>PROJECT HISTORY</span><h2>Versions</h2></div><button onClick={() => setShowVersions(false)}><X size={15} /></button></header><button className="checkpoint-button" onClick={() => void createCheckpoint()}><Plus size={13} /> Create checkpoint</button><div>{data?.versions.map(version => <article key={version.id}><span><History size={13} /></span><div><b>{version.label}</b><small>{new Date(version.created_at).toLocaleString()}</small></div><button onClick={() => void restoreVersion(version)}><RotateCcw size={13} /> Restore</button></article>)}{!data?.versions.length ? <p>No versions yet. Complete an agent run or save a file.</p> : null}</div></aside> : null}
+          {checkOutput ? <section className="builder-console"><header><span><Terminal size={13} /> Secure build output</span><button onClick={() => setCheckOutput("")}><X size={13} /></button></header><pre>{checkOutput}</pre></section> : null}
         </section>
       </div>
-
-      {published && <div className="publish-layer" role="dialog" aria-modal="true"><button className="publish-scrim" onClick={() => setPublished(false)} aria-label="Close" /><section className="publish-dialog"><button className="dialog-close" onClick={() => setPublished(false)}><X size={18} /></button><span className="publish-icon"><Globe size={22} /></span><h2>Publish this project</h2><p>Your project will be available on a secure KODO URL. You can connect a custom domain anytime.</p><label>Project URL<div><span>kodo.diy/</span><input defaultValue={projectId === "new" ? "untitled-project" : projectId} /></div></label><div className="publish-checks"><span><Check size={13} /> Production build passed</span><span><Check size={13} /> Project is ready to publish</span></div><button className="confirm-publish" onClick={() => setPublished(false)}><Play size={14} /> Publish project</button></section></div>}
+      {publishOpen ? <div className="publish-layer" role="dialog" aria-modal="true"><button className="publish-scrim" onClick={() => setPublishOpen(false)} aria-label="Close" /><section className="publish-dialog"><button className="dialog-close" onClick={() => setPublishOpen(false)}><X size={18} /></button><span className="publish-icon"><Globe size={22} /></span><h2>Build and publish</h2><p>KODO will run the production build in Vercel Sandbox, freeze a version and create a secure live URL.</p><div className="publish-checks"><span><Check size={13} /> Real project files</span><span><Check size={13} /> Versioned deployment</span><span><Check size={13} /> Isolated public page</span></div><button className="confirm-publish" disabled={publishing} onClick={() => void publish("production")}><Play size={14} /> {publishing ? "Building and publishing…" : "Publish production"}</button><button className="preview-publish" disabled={publishing} onClick={() => void publish("preview")}>Create preview URL</button></section></div> : null}
+      {githubOpen ? <div className="publish-layer" role="dialog" aria-modal="true"><button className="publish-scrim" onClick={() => setGithubOpen(false)} aria-label="Close" /><section className="publish-dialog github-dialog"><button className="dialog-close" onClick={() => setGithubOpen(false)}><X size={18} /></button><span className="publish-icon"><Github size={22} /></span><h2>Commit to GitHub</h2><p>Export every text file as one atomic commit to a branch in a repository connected to the KODO GitHub App.</p><label>Repository<input value={githubRepository} onChange={event => setGithubRepository(event.target.value)} placeholder="owner/repository" /></label><label>Branch (optional)<input value={githubBranch} onChange={event => setGithubBranch(event.target.value)} placeholder="kodo/my-project" /></label><button className="confirm-publish" disabled={!githubRepository.trim() || githubBusy} onClick={() => void exportToGitHub()}><GitBranch size={14} /> {githubBusy ? "Creating commit…" : "Commit project"}</button><a className="github-connect-link" href="/api/github/connect">Connect or update GitHub access</a></section></div> : null}
     </main>
   );
 }

@@ -1,27 +1,11 @@
-import { createSign } from "node:crypto";
-
 import { id, now } from "../../../../lib/db";
+import { createGitHubAppJwt, githubHeaders } from "../../../../lib/github-app";
 import { requireApiUser, unauthorized } from "../../../../lib/server-auth";
 
 type GitHubInstallation = {
   id: number;
   account?: { login?: string | null } | null;
 };
-
-function base64Url(value: string) {
-  return Buffer.from(value).toString("base64url");
-}
-
-function createAppJwt(appId: string, privateKey: string) {
-  const issuedAt = Math.floor(Date.now() / 1000) - 60;
-  const header = base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
-  const payload = base64Url(JSON.stringify({ iat: issuedAt, exp: issuedAt + 600, iss: appId }));
-  const unsigned = `${header}.${payload}`;
-  const signer = createSign("RSA-SHA256");
-  signer.update(unsigned);
-  signer.end();
-  return `${unsigned}.${signer.sign(privateKey.replace(/\\n/g, "\n"), "base64url")}`;
-}
 
 async function getExistingInstallation(): Promise<GitHubInstallation | null> {
   const appId = process.env.GITHUB_APP_ID;
@@ -30,12 +14,7 @@ async function getExistingInstallation(): Promise<GitHubInstallation | null> {
 
   try {
     const response = await fetch("https://api.github.com/app/installations?per_page=100", {
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${createAppJwt(appId, privateKey)}`,
-        "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "kodo-diy",
-      },
+      headers: githubHeaders(createGitHubAppJwt()),
       cache: "no-store",
     });
     if (!response.ok) return null;

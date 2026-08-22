@@ -13,9 +13,9 @@ export function OnboardingFlow() {
 
   async function finish() {
     setBusy(true); setError("");
-    const response = await fetch("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name, description: goal }) });
+    const response = await fetch("/api/projects", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name, description: goal, prompt: goal }) });
     const data = await response.json() as { project?: { id: string }; error?: string; code?: string };
-    if (response.ok && data.project) window.location.href = `/project/${data.project.id}?task=${encodeURIComponent(goal)}`;
+    if (response.ok && data.project) window.location.href = `/project/${data.project.id}?task=${encodeURIComponent(goal)}&autorun=1`;
     else { setError(data.code === "PROJECT_LIMIT_REACHED" ? `${data.error} Open Pricing to upgrade.` : data.error ?? "Could not create the project."); setBusy(false); }
   }
 

@@ -1,44 +1,19 @@
 import {
-  Activity,
-  ArrowRight,
-  Bot,
   Check,
-  CheckCircle2,
-  Clock3,
-  Code2,
   FileCode2,
   FolderGit2,
   GitBranch,
-  GitPullRequest,
-  Globe,
-  KeyRound,
   MoreHorizontal,
   Plus,
   RefreshCw,
-  Search,
   ShieldCheck,
-  Sparkles,
-  Terminal,
   Users,
-  Webhook,
   Workflow,
   Zap,
 } from "lucide-react";
 import { ProductShell } from "./product-shell";
 import { BillingPlanCard } from "./billing-plan-card";
 import { BillingUsage } from "./billing-usage";
-
-const agents = [
-  { name: "Build onboarding flow", repo: "kodo/web", branch: "feat/onboarding", status: "Working", time: "6m", icon: Sparkles },
-  { name: "Fix mobile navigation", repo: "kodo/web", branch: "fix/mobile-nav", status: "Ready for review", time: "14m", icon: GitPullRequest },
-  { name: "Add rate limits", repo: "kodo/api", branch: "feat/rate-limits", status: "Working", time: "22m", icon: Sparkles },
-  { name: "Implement usage alerts", repo: "kodo/dashboard", branch: "feat/usage-alerts", status: "Done", time: "Yesterday", icon: CheckCircle2 },
-  { name: "Polish empty states", repo: "kodo/web", branch: "ui/empty-states", status: "Ready for review", time: "Yesterday", icon: GitPullRequest },
-];
-
-export function AgentsView() {
-  return <ProductShell active="agents" title="Agents" context="WORK IN PROGRESS" actions={<a className="header-primary" href="/project/new"><Plus size={15} /> New agent</a>}><div className="segmented-filter"><button className="active">All <span>5</span></button><button>Working <span>2</span></button><button>Ready for review <span>2</span></button><button>Done <span>1</span></button></div><div className="agent-table"><div className="table-head"><span>Task</span><span>Repository</span><span>Status</span><span>Updated</span></div>{agents.map((agent) => <a href="/project/kodo-web" className="agent-row" key={agent.name}><span className={`row-icon ${agent.status.toLowerCase().replaceAll(" ", "-")}`}><agent.icon size={15} /></span><span className="row-main"><b>{agent.name}</b><small><GitBranch size={11} /> {agent.branch}</small></span><span className="row-repo">{agent.repo}</span><span className={`row-status ${agent.status.toLowerCase().replaceAll(" ", "-")}`}>{agent.status === "Working" && <i />}{agent.status}</span><time>{agent.time}</time><ArrowRight size={14} /></a>)}</div></ProductShell>;
-}
 
 const automations = [
   { title: "Fix CI failures on main", desc: "Investigate failures, repair the cause, and open a pull request.", trigger: "GitHub Actions fails", ran: "3h ago", icon: Zap },

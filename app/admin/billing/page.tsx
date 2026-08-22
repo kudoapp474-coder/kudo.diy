@@ -43,6 +43,10 @@ type AdjustmentRow = {
   created_at: string;
 };
 
+type BuilderSummaryRow = { total_generations: number; completed_generations: number; failed_generations: number; total_deployments: number };
+type GenerationRow = { id: string; project_id: string; project_name: string; prompt: string; status: string; model: string; credits_used: number; created_at: string };
+type DeploymentRow = { id: string; project_id: string; project_name: string; environment: string; status: string; url: string | null; created_at: string };
+
 function formatDate(value: string | null) {
   if (!value) return "—";
   const date = new Date(value);
@@ -81,7 +85,7 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
   `;
 
   const workspaceStatement = auth.db.prepare(workspaceSql);
-  const [workspaces, summary, billingEvents, adjustments] = await Promise.all([
+  const [workspaces, summary, billingEvents, adjustments, builderSummary, generations, deployments] = await Promise.all([
     all<WorkspaceRow>(query ? workspaceStatement.bind(like, like, like) : workspaceStatement),
     auth.db.prepare(`
       SELECT
@@ -97,6 +101,16 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
     all<AdjustmentRow>(auth.db.prepare(
       "SELECT id, workspace_id, admin_email, delta, reason, previous_balance, new_balance, status, created_at FROM credit_adjustments ORDER BY created_at DESC LIMIT 30",
     )),
+    auth.db.prepare(`SELECT
+      COUNT(*) AS total_generations,
+      SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) AS completed_generations,
+      SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS failed_generations,
+      (SELECT COUNT(*) FROM deployments) AS total_deployments
+      FROM generations`).first<BuilderSummaryRow>(),
+    all<GenerationRow>(auth.db.prepare(`SELECT g.id, g.project_id, p.name AS project_name, g.prompt, g.status, g.model, g.credits_used, g.created_at
+      FROM generations g JOIN projects p ON p.id = g.project_id ORDER BY g.created_at DESC LIMIT 30`)),
+    all<DeploymentRow>(auth.db.prepare(`SELECT d.id, d.project_id, p.name AS project_name, d.environment, d.status, d.url, d.created_at
+      FROM deployments d JOIN projects p ON p.id = d.project_id ORDER BY d.created_at DESC LIMIT 30`)),
   ]);
 
   return (
@@ -107,6 +121,13 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
           <article><span>Pro workspaces</span><strong>{Number(summary?.pro_workspaces ?? 0).toLocaleString("en-IN")}</strong></article>
           <article><span>Credits in circulation</span><strong>{Number(summary?.total_credits ?? 0).toLocaleString("en-IN")}</strong></article>
           <article><span>Recent billing events</span><strong>{billingEvents.length.toLocaleString("en-IN")}</strong></article>
+        </section>
+
+        <section className="admin-overview builder-overview" aria-label="Builder operations overview">
+          <article><span>Agent generations</span><strong>{Number(builderSummary?.total_generations ?? 0).toLocaleString("en-IN")}</strong></article>
+          <article><span>Completed builds</span><strong>{Number(builderSummary?.completed_generations ?? 0).toLocaleString("en-IN")}</strong></article>
+          <article><span>Failed builds</span><strong>{Number(builderSummary?.failed_generations ?? 0).toLocaleString("en-IN")}</strong></article>
+          <article><span>Deployments</span><strong>{Number(builderSummary?.total_deployments ?? 0).toLocaleString("en-IN")}</strong></article>
         </section>
 
         <section className="admin-panel">
@@ -163,6 +184,23 @@ export default async function AdminBillingPage({ searchParams }: { searchParams:
                 </article>
               ))}
               {!adjustments.length && <p className="admin-empty">No manual adjustments have been made.</p>}
+            </div>
+          </section>
+        </div>
+
+        <div className="admin-columns">
+          <section className="admin-panel">
+            <header><div><span>Builder operations</span><h2>Recent agent generations</h2></div></header>
+            <div className="admin-feed">
+              {generations.map(generation => <article key={generation.id}><span className={`admin-event-dot ${generation.status}`} /><div><b>{generation.prompt}</b><small>{generation.project_name} · {generation.model} · {generation.credits_used} credits</small></div><time>{formatDate(generation.created_at)}<small>{generation.status}</small></time></article>)}
+              {!generations.length && <p className="admin-empty">No agent generations recorded yet.</p>}
+            </div>
+          </section>
+          <section className="admin-panel">
+            <header><div><span>Release operations</span><h2>Recent deployments</h2></div></header>
+            <div className="admin-feed">
+              {deployments.map(deployment => <article key={deployment.id}><span className={`admin-event-dot ${deployment.status}`} /><div><b>{deployment.project_name}</b><small>{deployment.environment} · {deployment.project_id}</small></div><time>{formatDate(deployment.created_at)}{deployment.url ? <a href={deployment.url} target="_blank" rel="noreferrer">Open</a> : <small>{deployment.status}</small>}</time></article>)}
+              {!deployments.length && <p className="admin-empty">No deployments recorded yet.</p>}
             </div>
           </section>
         </div>

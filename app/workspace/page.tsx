@@ -1,11 +1,26 @@
-import { ArrowRight, CheckCircle2, GitBranch, GitPullRequest, Plus, ShieldCheck, Sparkles, Terminal, WandSparkles, Zap } from "lucide-react";
+import { ArrowRight, CheckCircle2, GitBranch, GitPullRequest, ShieldCheck, Terminal, WandSparkles, Zap } from "lucide-react";
+import { all } from "../../lib/db";
+import { requireApiUser } from "../../lib/server-auth";
 import { ProductShell } from "../components/product-shell";
+import { WorkspaceComposer } from "../components/workspace-composer";
 
-const activity = [
-  { title: "Build KODO onboarding flow", repo: "kodo/web", branch: "feat/onboarding", status: "Working", time: "6m" },
-  { title: "Fix mobile navigation", repo: "kodo/web", branch: "fix/mobile-nav", status: "Ready for review", time: "14m" },
-  { title: "Add rate limits to public routes", repo: "kodo/api", branch: "feat/rate-limits", status: "Working", time: "22m" },
-  { title: "Implement usage alerts", repo: "kodo/dashboard", branch: "feat/usage-alerts", status: "Done", time: "Yesterday" },
-];
+type Activity = { id: string; project_id: string; project_name: string; prompt: string; status: string; branch: string; created_at: string };
 
-export default function WorkspacePage(){return <ProductShell active="home" title="What should we build?" context="KODO AGENTS" actions={<div className="system-ready"><i /> Systems ready</div>}><p className="workspace-lede">Describe the result. KODO will plan the work and show you every change.</p><form className="workspace-composer" action="/project/new"><textarea name="task" placeholder="Plan, search, build anything" aria-label="Give KODO a task"/><div><button type="button" className="composer-plus"><Plus size={16}/></button><button type="button" className="composer-repo"><GitBranch size={14}/> kodo/web <span>⌄</span></button><span/><button type="button" className="composer-model"><Sparkles size={13}/> Auto</button><button className="composer-submit"><ArrowRight size={16}/></button></div><footer><span>@ context</span><span>/ commands</span><span>⌘ ↵ run</span></footer></form><div className="workspace-actions"><a href="/project/new"><WandSparkles size={16}/><span><b>Build a feature</b><small>Turn a product idea into working code</small></span><ArrowRight size={14}/></a><a href="/project/new"><Zap size={16}/><span><b>Fix an issue</b><small>Debug failures and verify the repair</small></span><ArrowRight size={14}/></a><a href="/agents"><GitPullRequest size={16}/><span><b>Review changes</b><small>Find bugs before they reach production</small></span><ArrowRight size={14}/></a></div><section className="workspace-recent"><header><h2>Recent agents</h2><a href="/agents">View all <ArrowRight size={13}/></a></header><div>{activity.map(item=><a href="/project/kodo-web" key={item.title}><span className={`recent-status ${item.status.toLowerCase().replaceAll(" ","-")}`}>{item.status==="Working"?<i/>:item.status==="Ready for review"?<GitPullRequest size={14}/>:<CheckCircle2 size={14}/>}</span><span><b>{item.title}</b><small><GitBranch size={11}/>{item.repo} · {item.branch}</small></span><em>{item.status}</em><time>{item.time}</time><ArrowRight size={14}/></a>)}</div></section><div className="workspace-info"><article><Terminal size={17}/><div><h3>Continue from anywhere</h3><p>Start in the browser, hand work to the cloud, and pick it up later from desktop or CLI.</p></div></article><article><ShieldCheck size={17}/><div><h3>You approve important actions</h3><p>Production deploys, secrets, and destructive commands always stay visible.</p></div></article></div></ProductShell>}
+function relativeTime(value: string) {
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).valueOf()) / 60_000));
+  if (minutes < 1) return "Now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+export default async function WorkspacePage() {
+  const auth = await requireApiUser();
+  const activity = auth ? await all<Activity>(auth.db.prepare(`
+    SELECT g.id, g.project_id, p.name AS project_name, g.prompt, g.status, p.branch, g.created_at
+    FROM generations g JOIN projects p ON p.id = g.project_id
+    WHERE g.workspace_id = ? ORDER BY g.created_at DESC LIMIT 6
+  `).bind(auth.workspaceId)) : [];
+  return <ProductShell active="home" title="What should we build?" context="KODO AGENTS" actions={<div className="system-ready"><i /> Systems ready</div>}><p className="workspace-lede">Describe the result. KODO will create the project, build real files, verify them and show the live preview.</p><WorkspaceComposer/><div className="workspace-actions"><a href="#build"><WandSparkles size={16}/><span><b>Build a website</b><small>Turn one prompt into a working project</small></span><ArrowRight size={14}/></a><a href="/projects"><Zap size={16}/><span><b>Edit a project</b><small>Open a project and ask KODO for changes</small></span><ArrowRight size={14}/></a><a href="/agents"><GitPullRequest size={16}/><span><b>Review changes</b><small>Inspect generations, versions and checks</small></span><ArrowRight size={14}/></a></div><section className="workspace-recent"><header><h2>Recent agents</h2><a href="/agents">View all <ArrowRight size={13}/></a></header><div>{activity.map(item=>{const label=item.status==="complete"?"Done":item.status==="error"?"Failed":"Working";return <a href={`/project/${item.project_id}`} key={item.id}><span className={`recent-status ${label.toLowerCase()}`}>{label==="Working"?<i/>:<CheckCircle2 size={14}/>}</span><span><b>{item.prompt}</b><small><GitBranch size={11}/>{item.project_name} · {item.branch}</small></span><em>{label}</em><time>{relativeTime(item.created_at)}</time><ArrowRight size={14}/></a>})}{!activity.length?<div className="workspace-empty-activity"><WandSparkles size={18}/><span><b>Your first real agent run will appear here</b><small>Describe a website above to begin.</small></span></div>:null}</div></section><div className="workspace-info"><article><Terminal size={17}/><div><h3>Real files and preview</h3><p>Every agent change is saved, previewed in isolation and kept in version history.</p></div></article><article><ShieldCheck size={17}/><div><h3>Verified before publishing</h3><p>KODO runs the production build in Vercel Sandbox before a project goes live.</p></div></article></div></ProductShell>;
+}
