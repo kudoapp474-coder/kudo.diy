@@ -17,6 +17,14 @@ type ProjectFile = { path: string; content: string; language: string };
 type Manifest = { paths?: unknown };
 
 const MANIFEST_PATH = ".kodo/project-manifest.json";
+const VERCEL_CONFIG_PATH = "vercel.json";
+const DEFAULT_VERCEL_CONFIG = JSON.stringify({
+  $schema: "https://openapi.vercel.sh/vercel.json",
+  framework: null,
+  installCommand: "npm install",
+  buildCommand: "npm run build",
+  outputDirectory: "dist",
+}, null, 2) + "\n";
 
 class GitHubRequestError extends Error {
   constructor(message: string, readonly status: number) {
@@ -145,9 +153,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
     const files = await all<ProjectFile>(auth.db.prepare("SELECT path, content, language FROM project_files WHERE project_id = ? ORDER BY path").bind(projectId));
     const textFiles = files.filter(file => file.language !== "asset" && Boolean(safeProjectPath(file.path)) && !file.path.startsWith(".kodo/"));
     if (!textFiles.length) throw new Error("This project has no text files to sync.");
+    const syncFiles = textFiles.some(file => file.path === VERCEL_CONFIG_PATH)
+      ? textFiles
+      : [...textFiles, { path: VERCEL_CONFIG_PATH, content: DEFAULT_VERCEL_CONFIG, language: "json" }];
 
     const previousPaths = targetBranchExists ? await readManagedPaths(repository, branch, token) : [];
-    const currentPaths = new Set(textFiles.map(file => file.path));
+    const currentPaths = new Set(syncFiles.map(file => file.path));
     const deletedPaths = previousPaths.filter(path => !currentPaths.has(path));
     const manifest = JSON.stringify({
       projectId,
@@ -156,7 +167,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
       syncedAt: now(),
     }, null, 2) + "\n";
 
-    const blobs = await Promise.all([...textFiles.map(file => ({ path: file.path, content: file.content })), { path: MANIFEST_PATH, content: manifest }].map(async file => {
+    const blobs = await Promise.all([...syncFiles.map(file => ({ path: file.path, content: file.content })), { path: MANIFEST_PATH, content: manifest }].map(async file => {
       const blob = await github<GitHubResponse>(`https://api.github.com/repos/${repository}/git/blobs`, token, {
         method: "POST",
         body: JSON.stringify({ content: file.content, encoding: "utf-8" }),
