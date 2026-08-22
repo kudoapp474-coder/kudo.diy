@@ -1,10 +1,12 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
-import { CircleAlert, FileCode2, MoreHorizontal, Plus, ShieldCheck, Workflow, X, Zap } from "lucide-react";
+import { CircleAlert, FileCode2, FolderGit2, MoreHorizontal, Plus, ShieldCheck, Workflow, X, Zap } from "lucide-react";
 
 type Automation = {
   id: string;
+  project_id: string | null;
+  project_name: string | null;
   name: string;
   prompt: string;
   trigger_type: string;
@@ -13,6 +15,8 @@ type Automation = {
   last_run_at: string | null;
   created_at: string;
 };
+
+type Project = { id: string; name: string };
 
 const TRIGGER_TYPES: Record<string, { label: string; icon: typeof Zap }> = {
   ci_failure: { label: "GitHub Actions fails", icon: Zap },
@@ -36,13 +40,21 @@ async function loadAutomations() {
   return data.automations ?? [];
 }
 
+async function loadProjects() {
+  const response = await fetch("/api/projects", { cache: "no-store" });
+  const data = await response.json() as { projects?: Project[] };
+  return data.projects ?? [];
+}
+
 export function AutomationsManager() {
   const [automations, setAutomations] = useState<Automation[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState("");
+  const [triggerType, setTriggerType] = useState("ci_failure");
 
   async function refresh() {
     setLoading(true);
@@ -58,8 +70,8 @@ export function AutomationsManager() {
 
   useEffect(() => {
     let active = true;
-    loadAutomations()
-      .then(result => { if (active) setAutomations(result); })
+    Promise.all([loadAutomations(), loadProjects()])
+      .then(([loadedAutomations, loadedProjects]) => { if (active) { setAutomations(loadedAutomations); setProjects(loadedProjects); } })
       .catch(reason => { if (active) setError(reason instanceof Error ? reason.message : "Could not load automations."); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -71,7 +83,6 @@ export function AutomationsManager() {
     setSaving(true);
     setFormError("");
     const form = new FormData(event.currentTarget);
-    const triggerType = String(form.get("triggerType") ?? "");
     const description = String(form.get("description") ?? "").trim();
     try {
       const response = await fetch("/api/automations", {
@@ -80,7 +91,8 @@ export function AutomationsManager() {
         body: JSON.stringify({
           name: form.get("name"),
           prompt: form.get("prompt"),
-          triggerType,
+          triggerType: form.get("triggerType"),
+          projectId: form.get("projectId"),
           triggerConfig: description ? { description } : {},
         }),
       });
@@ -94,6 +106,10 @@ export function AutomationsManager() {
       setSaving(false);
     }
   }
+
+  const triggerHelp = triggerType === "schedule"
+    ? "Runs at most once per day (the hosting plan's cron limit) rather than at an exact time."
+    : "Runs automatically when this happens on the linked project's connected GitHub repository.";
 
   return <>
     {error ? <div className="manager-error">{error}</div> : null}
@@ -110,6 +126,7 @@ export function AutomationsManager() {
             <h2>{automation.name}</h2>
             <p>{automation.prompt}</p>
             <div className="automation-trigger"><Workflow size={13} /><span><small>TRIGGER</small>{trigger.label}{detail ? ` · ${detail}` : ""}</span></div>
+            {automation.project_name ? <div className="automation-project"><FolderGit2 size={11} /> {automation.project_name}</div> : null}
             <footer><span><i /> {automation.active ? "Active" : "Paused"}</span><time>{automation.last_run_at ? `Ran ${new Date(automation.last_run_at).toLocaleString()}` : "Not run yet"}</time></footer>
           </article>;
         })}
@@ -122,13 +139,15 @@ export function AutomationsManager() {
         <button type="button" className="manager-close" onClick={() => setShowCreate(false)}><X size={17} /></button>
         <span className="manager-icon"><Workflow size={19} /></span>
         <h2>New automation</h2>
-        <p>KODO saves this automation definition to your workspace. Trigger delivery for it is not connected yet, so it will not run on its own until that connection exists.</p>
+        <p>KODO runs this automation&rsquo;s prompt against the project you choose, using the trigger you pick below.</p>
         <label>Name<input name="name" placeholder="Fix CI failures on main" required autoFocus /></label>
+        <label>Project<select name="projectId" required defaultValue="">{!projects.length ? <option value="" disabled>No projects yet</option> : <option value="" disabled>Choose a project</option>}{projects.map(project => <option value={project.id} key={project.id}>{project.name}</option>)}</select></label>
         <label>What should KODO do?<textarea name="prompt" placeholder="Investigate the failure, repair the cause, and open a pull request." required /></label>
-        <label>Trigger<select name="triggerType" defaultValue="ci_failure">{Object.entries(TRIGGER_TYPES).map(([value, config]) => <option value={value} key={value}>{config.label}</option>)}</select></label>
+        <label>Trigger<select name="triggerType" value={triggerType} onChange={event => setTriggerType(event.target.value)}>{Object.entries(TRIGGER_TYPES).map(([value, config]) => <option value={value} key={value}>{config.label}</option>)}</select></label>
+        <p className="automation-form-hint">{triggerHelp}</p>
         <label>Trigger detail (optional)<input name="description" placeholder="Fridays at 5:00 PM" /></label>
         {formError ? <p className="workspace-composer-error" role="alert"><CircleAlert size={12} /> {formError}</p> : null}
-        <button className="manager-submit" disabled={saving}>{saving ? "Saving..." : "Save automation"}</button>
+        <button className="manager-submit" disabled={saving || !projects.length}>{saving ? "Saving..." : "Save automation"}</button>
       </form>
     </div> : null}
   </>;

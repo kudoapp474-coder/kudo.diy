@@ -86,7 +86,7 @@ export async function ensureDatabase() {
     db.prepare("CREATE INDEX IF NOT EXISTS project_audit_events_project_idx ON project_audit_events(project_id, created_at)"),
     db.prepare("CREATE TABLE IF NOT EXISTS github_syncs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, repository TEXT NOT NULL, branch TEXT NOT NULL, commit_sha TEXT, status TEXT NOT NULL DEFAULT 'syncing', url TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"),
     db.prepare("CREATE INDEX IF NOT EXISTS github_syncs_project_idx ON github_syncs(project_id, created_at)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS automations (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, name TEXT NOT NULL, prompt TEXT NOT NULL, trigger_type TEXT NOT NULL, trigger_config_json TEXT NOT NULL DEFAULT '{}', active INTEGER NOT NULL DEFAULT 1, last_run_at TEXT, created_at TEXT NOT NULL)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS automations (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, project_id TEXT, name TEXT NOT NULL, prompt TEXT NOT NULL, trigger_type TEXT NOT NULL, trigger_config_json TEXT NOT NULL DEFAULT '{}', active INTEGER NOT NULL DEFAULT 1, last_run_at TEXT, created_at TEXT NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, provider TEXT NOT NULL, account_label TEXT, status TEXT NOT NULL DEFAULT 'disconnected', metadata_json TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL)"),
     db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS connections_provider_idx ON connections(workspace_id, provider)"),
     db.prepare("CREATE TABLE IF NOT EXISTS usage_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, generation_id TEXT, kind TEXT NOT NULL, units INTEGER NOT NULL, metadata_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)"),
@@ -95,6 +95,7 @@ export async function ensureDatabase() {
     db.prepare("CREATE TABLE IF NOT EXISTS credit_adjustments (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, admin_email TEXT NOT NULL, delta INTEGER NOT NULL, reason TEXT NOT NULL, previous_balance INTEGER NOT NULL, new_balance INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, completed_at TEXT)"),
     db.prepare("CREATE INDEX IF NOT EXISTS credit_adjustments_workspace_idx ON credit_adjustments(workspace_id, created_at)"),
   ]);
+  try { await db.prepare("ALTER TABLE automations ADD COLUMN project_id TEXT").run(); } catch { /* already migrated */ }
   return db;
 }
 

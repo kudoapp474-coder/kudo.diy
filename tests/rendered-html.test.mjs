@@ -38,7 +38,7 @@ test("wires the real prompt-to-publish builder flow", async () => {
     readFile(new URL("../app/components/workspace-composer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/project-workspace.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/api/projects/route.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/agent/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/agent-runner.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/projects/[projectId]/publish/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/projects/[projectId]/deployments/[deploymentId]/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/vercel-publish.ts", import.meta.url), "utf8"),
@@ -190,7 +190,7 @@ test("wires a verified model selector through generation history and usage", asy
     readFile(new URL("../app/components/workspace-composer.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/project/[projectId]/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/components/project-workspace.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/agent/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/agent-runner.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/admin/billing/page.tsx", import.meta.url), "utf8"),
   ]);
 
@@ -224,7 +224,7 @@ test("wires a verified model selector through generation history and usage", asy
 test("enforces rolling AI spend limits and in-run credit budgets", async () => {
   const [spendPolicy, agentApi, database, adminBilling] = await Promise.all([
     readFile(new URL("../lib/agent-spend.ts", import.meta.url), "utf8"),
-    readFile(new URL("../app/api/agent/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/agent-runner.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/db.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/admin/billing/page.tsx", import.meta.url), "utf8"),
   ]);
@@ -240,7 +240,7 @@ test("enforces rolling AI spend limits and in-run credit budgets", async () => {
   assert.match(agentApi, /code: "AGENT_ALREADY_RUNNING"/);
   assert.match(agentApi, /INSERT OR IGNORE INTO agent_run_locks/);
   assert.match(agentApi, /prepareStep:/);
-  assert.match(agentApi, /maxOutputTokens:/);
+  assert.match(agentApi, /maxOutputTokens/);
   assert.match(agentApi, /runCreditBudget/);
   assert.match(agentApi, /budgetLimited/);
   assert.match(agentApi, /boundedProjectContext\(files\)/);
